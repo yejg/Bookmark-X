@@ -1,12 +1,14 @@
 package indi.bookmarkx.model;
 
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.fileTypes.FileType;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import indi.bookmarkx.model.po.BookmarkPO;
+import com.intellij.openapi.editor.Document;
 
 /**
  * @author Nonoas
@@ -33,6 +35,30 @@ public class BookmarkConverter {
             if (null != fileDescriptor) {
                 VirtualFile file = fileDescriptor.getFile();
                 po.setVirtualFilePath(file.getPath());
+
+                // 获取行内容并生成哈希
+                Document document = FileDocumentManager.getInstance().getDocument(file);
+                if (document != null && nodeModel.getLine() < document.getLineCount()) {
+                    int startOffset = document.getLineStartOffset(nodeModel.getLine());
+                    int endOffset = document.getLineEndOffset(nodeModel.getLine());
+                    String lineContent = document.getText().substring(startOffset, endOffset);
+                    po.setLineContentHash(BookmarkPO.generateLineHash(lineContent));
+
+                    // 保存上下文（前后1行），提升匹配准确率
+                    String context = "";
+                    if (nodeModel.getLine() > 0) {
+                        int prevStart = document.getLineStartOffset(nodeModel.getLine() - 1);
+                        int prevEnd = document.getLineEndOffset(nodeModel.getLine() - 1);
+                        context += document.getText().substring(prevStart, prevEnd) + "|";
+                    }
+                    context += lineContent + "|";
+                    if (nodeModel.getLine() < document.getLineCount() - 1) {
+                        int nextStart = document.getLineStartOffset(nodeModel.getLine() + 1);
+                        int nextEnd = document.getLineEndOffset(nodeModel.getLine() + 1);
+                        context += document.getText().substring(nextStart, nextEnd);
+                    }
+                    po.setLineContext(context);
+                }
             } else {
                 log.warn(String.format("%s指向的位置已不存在", nodeModel.getName()));
             }

@@ -9,6 +9,7 @@ import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentFactory;
 import indi.bookmarkx.action.BookmarkExportAction;
 import indi.bookmarkx.action.BookmarkImportAction;
+import indi.bookmarkx.global.GitBranchChangeCompatListener;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.Arrays;
@@ -25,6 +26,9 @@ public class RootWindowFactory implements ToolWindowFactory, DumbAware {
         ContentFactory contentFactory = ContentFactory.SERVICE.getInstance();
         Content regularRetention = contentFactory.createContent(manager.getToolWindowRootPanel(), null, false);
         toolWindow.getContentManager().addContent(regularRetention);
+
+        // 注册git分支切换监听器
+        GitBranchChangeCompatListener.register(project);
     }
 
     private void initTitleAction(ToolWindow toolWindow) {

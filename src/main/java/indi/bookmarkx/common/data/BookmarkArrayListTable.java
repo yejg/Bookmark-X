@@ -87,4 +87,8 @@ public final class BookmarkArrayListTable extends ArrayListTable<BookmarkNodeMod
             this.delete((BookmarkNodeModel) model);
         }
     }
+
+    public List<BookmarkNodeModel> getDataList() {
+        return dataList;
+    }
 }

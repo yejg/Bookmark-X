@@ -28,6 +28,7 @@ intellij {
     version = '2021.2.2'
 //    version = '2023.3.6'
 //    version = '2024.3.7'
+    plugins = ['git4idea']
 }
 
 patchPluginXml {

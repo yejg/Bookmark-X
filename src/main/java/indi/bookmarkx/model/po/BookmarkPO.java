@@ -1,6 +1,9 @@
 package indi.bookmarkx.model.po;
 
 import javax.xml.bind.annotation.XmlRootElement;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -36,6 +39,9 @@ public class BookmarkPO {
     private String virtualFilePath;
 
     private List<BookmarkPO> children = new ArrayList<>();
+
+    private String lineContentHash; // 行内容的MD5哈希
+    private String lineContext;     // 行上下文（前后1行）
 
     public BookmarkPO() {
 
@@ -128,5 +134,38 @@ public class BookmarkPO {
     @Override
     public String toString() {
         return name;
+    }
+
+    public String getLineContentHash() {
+        return lineContentHash;
+    }
+
+    public void setLineContentHash(String lineContentHash) {
+        this.lineContentHash = lineContentHash;
+    }
+
+    public String getLineContext() {
+        return lineContext;
+    }
+
+    public void setLineContext(String lineContext) {
+        this.lineContext = lineContext;
+    }
+
+    public static String generateLineHash(String content) {
+        if (content == null || content.isEmpty()) {
+            return "";
+        }
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] hashBytes = md.digest(content.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : hashBytes) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            return content.hashCode() + ""; // 降级方案
+        }
     }
 }
