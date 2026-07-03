@@ -54,6 +54,8 @@ public final class BookmarksManager {
 
     private final FileMarksCache fileMarksCache = new FileMarksCache();
 
+    private final BookmarkArrayListTable bookmarkArrayListTable;
+
     private final Supplier<BookmarkListener> bookmarkEventPublisher;
 
     public BookmarksManager(Project project) {
