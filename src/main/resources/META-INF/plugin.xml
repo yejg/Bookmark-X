@@ -33,6 +33,7 @@
 
         <projectService serviceImplementation="indi.bookmarkx.persistence.MyPersistent"/>    <depends>org.intellij.plugins.markdown</depends>
 
+        <projectService serviceImplementation="indi.bookmarkx.global.BranchSwitchService"/>
 
         <editor.linePainter implementation="indi.bookmarkx.ui.painter.LineEndPainter"/>
 

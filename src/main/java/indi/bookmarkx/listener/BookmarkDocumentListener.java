@@ -12,6 +12,7 @@ import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 import indi.bookmarkx.BookmarksManager;
+import indi.bookmarkx.global.BranchSwitchService;
 import indi.bookmarkx.persistence.MyPersistent;
 import indi.bookmarkx.common.data.BookmarkArrayListTable;
 import indi.bookmarkx.model.BookmarkNodeModel;
@@ -62,6 +63,10 @@ public class BookmarkDocumentListener implements DocumentListener {
 
     private void perceivedLineChange(Project project, List<BookmarkNodeModel> indexList) {
         if (CollectionUtils.isEmpty(indexList)) {
+            return;
+        }
+        BranchSwitchService branchService = BranchSwitchService.getInstance(project);
+        if (branchService != null && branchService.isBranchSwitchInProgress()) {
             return;
         }
         BookmarkArrayListTable bookmarkArrayListTable = BookmarkArrayListTable.getInstance(project);
