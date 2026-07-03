@@ -29,7 +29,7 @@ import java.util.List;
  */
 public class BookmarkDocumentListener implements DocumentListener {
 
-    private static final Logger LOG = Logger.getInstance(MyPersistent.class);
+    private static final Logger LOG = Logger.getInstance(BookmarkDocumentListener.class);
 
     @Override
     public void documentChanged(@NotNull DocumentEvent event) {
