@@ -7,8 +7,11 @@ import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.notification.NotificationGroupManager;
+import com.intellij.notification.NotificationType;
 import com.intellij.util.Alarm;
 import indi.bookmarkx.BookmarksManager;
+import indi.bookmarkx.common.I18N;
 import indi.bookmarkx.common.data.BookmarkArrayListTable;
 import indi.bookmarkx.listener.BookmarkListener;
 import indi.bookmarkx.model.BookmarkNodeModel;
@@ -247,6 +250,17 @@ public final class BookmarkRelocationService {
         manager.getToolWindowRootPanel().tree().repaint();
         LOG.info("书签重定位完成，已更新 " + relocated + " 个，回填锚点 " + backfilled
                 + " 个，失效 " + lost + " 个");
+
+        if (lost > 0) {
+            // 只在真的丢过书签时提示，且每个书签只在首次失效时计一次，不会反复打扰。
+            // 文案里要说明恢复方式，否则用户会以为书签被删了。
+            NotificationGroupManager.getInstance()
+                    .getNotificationGroup("Bookmark-X")
+                    .createNotification(I18N.get("bookmark.relocationNotificationTitle"),
+                            I18N.get("bookmark.relocationNotificationContent", relocated, lost),
+                            NotificationType.WARNING)
+                    .notify(project);
+        }
     }
 
     private static void releaseMarker(BookmarkNodeModel model) {

@@ -17,7 +17,9 @@ import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBPanel;
 import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.UIUtil;
+import indi.bookmarkx.common.I18N;
 import indi.bookmarkx.model.AbstractTreeNodeModel;
+import indi.bookmarkx.model.BookmarkNodeModel;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -113,6 +115,19 @@ public class BookmarkTipPanel extends JBPanel<BookmarkTipPanel> {
         }
 
         // === SECTIONS (可选的附加信息) ===
+        // 锚点失效时说明原因与恢复方式，否则用户只会看到一个灰掉的书签而无从判断
+        if (model instanceof BookmarkNodeModel && ((BookmarkNodeModel) model).isAnchorLost()) {
+            html.append(DocumentationMarkup.SECTIONS_START);
+            html.append(DocumentationMarkup.SECTION_HEADER_START);
+            html.append("Status:");
+            html.append(DocumentationMarkup.SECTION_SEPARATOR);
+            html.append("<p style='color:gray;'>")
+                    .append(escapeHtml(I18N.get("bookmark.anchorLostTip")))
+                    .append("</p>");
+            html.append(DocumentationMarkup.SECTION_END);
+            html.append(DocumentationMarkup.SECTIONS_END);
+        }
+
         // 你可以添加更多的 section，比如标签、创建时间等
         String tags = getTagsInfo(model);
         if (tags != null) {

@@ -40,6 +40,7 @@ public class BmkTreeCellRenderer extends DefaultTreeCellRenderer {
 
         BookmarkTreeNode node = (BookmarkTreeNode) value;
         Icon icon = null;
+        boolean anchorLost = false;
         if (0 == row) {
             // if is root node
             icon = AllIcons.Nodes.Module;
@@ -49,12 +50,21 @@ public class BmkTreeCellRenderer extends DefaultTreeCellRenderer {
                     : AllIcons.Nodes.Folder;
             if (node.isBookmark()) {
                 BookmarkNodeModel model =  (BookmarkNodeModel) node.getUserObject();
-                if (null == model.getOpenFileDescriptor()) {
+                anchorLost = model.isAnchorLost();
+                if (anchorLost || null == model.getOpenFileDescriptor()) {
                     icon = IconLoader.findIcon("icons/dissmiss.svg", BmkTreeCellRenderer.class);
                 }
             }
         }
         setIcon(icon);
+
+        if (anchorLost) {
+            // 锚点失效的书签不从树上摘掉，只灰显：切回原分支时它能自动恢复。
+            // 选中行保持选中配色，否则灰字压在选中背景上反而更难看清。
+            if (!selected) {
+                setForeground(UIUtil.getInactiveTextColor());
+            }
+        }
         return this;
     }
 

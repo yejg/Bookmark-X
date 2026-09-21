@@ -55,6 +55,9 @@
 
         <postStartupActivity implementation="indi.bookmarkx.mcp.BookmarkMcpStartupActivity"/>
 
+        <!-- 锚点失效时的汇总提示；分组 id 由重定位服务按名字取用 -->
+        <notificationGroup id="Bookmark-X" displayType="BALLOON"/>
+
 
     </extensions>
 

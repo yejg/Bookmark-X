@@ -40,7 +40,8 @@ public class LineEndPainter extends EditorLinePainter {
         try {
             List<BookmarkNodeModel> onlyIndex = bookmarkArrayListTable.getOnlyIndex(virtualFile.getPath());
             BookmarkNodeModel bookmarkNodeModel = LineEndPainter.findLine(onlyIndex, i);
-            if (bookmarkNodeModel == null) {
+            if (bookmarkNodeModel == null || bookmarkNodeModel.isAnchorLost()) {
+                // 失效书签的行号已经不可信，在旧行号后面写书名反而误导读者，宁可不画
                 return null;
             }
             result.add(new LineExtensionInfo(String.format(" // %s", bookmarkNodeModel.getName()),
