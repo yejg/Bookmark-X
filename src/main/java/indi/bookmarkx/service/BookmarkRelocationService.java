@@ -24,7 +24,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
@@ -106,7 +106,7 @@ public final class BookmarkRelocationService {
         // 这里本来就要全量重算，切分支过程中积压的文件重载事件无需再触发一轮
         alarm.cancelAllRequests();
         pendingFiles.clear();
-        runInBackground(() -> doRelocate(files, snapshot));
+        startRelocate(files, snapshot);
     }
 
     /**
@@ -130,8 +130,7 @@ public final class BookmarkRelocationService {
             if (project.isDisposed()) {
                 return;
             }
-            List<VirtualFile> files = bookmarkedFiles();
-            runInBackground(() -> doRelocate(files, Collections.emptyMap()));
+            startRelocate(bookmarkedFiles(), Collections.emptyMap());
         });
     }
 
@@ -141,36 +140,83 @@ public final class BookmarkRelocationService {
         if (files.isEmpty()) {
             return;
         }
-        // 此路径拿不到切换前的 revision，直接走内容匹配
-        doRelocate(files, Collections.emptyMap());
+        // 本方法跑在 Alarm 的线程池线程上，而要读的书签表只在 EDT 上安全，故先回到 EDT
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (project.isDisposed()) {
+                return;
+            }
+            // 此路径拿不到切换前的 revision，直接走内容匹配
+            startRelocate(files, Collections.emptyMap());
+        });
+    }
+
+    /**
+     * 在 EDT 上取好书签快照，再把纯计算交给后台线程。
+     * <p>{@code BookmarkArrayListTable} 内部是普通的 {@code ArrayList}，由 EDT 侧的
+     * {@code insert}/{@code delete} 维护。后台线程直接遍历它，会与这些写操作并发：
+     * 轻则读到脏数据，重则抛 {@code ConcurrentModificationException}——而异常会被
+     * {@link #runInBackground} 吞掉并只记一条日志，表现出来就是
+     * 「书签重定位静默不生效」，极难排查。所以凡是要访问书签表的动作都在这里收口。</p>
+     *
+     * @param files        含书签的文件
+     * @param oldRevisions 文件绝对路径 → 切换前 revision；为空表示无 git 提议
+     */
+    private void startRelocate(List<VirtualFile> files, Map<String, String> oldRevisions) {
+        Set<String> wanted = new HashSet<>();
+        for (VirtualFile file : files) {
+            wanted.add(file.getPath());
+        }
+
+        // 一次遍历全表就把命中文件的书签归好组。若改成每个文件各扫一遍全表，
+        // 一次大 checkout 会变成「文件数 × 书签数」的乘积级开销，而现在这段跑在 EDT 上。
+        Map<String, List<BookmarkNodeModel>> byPath = new HashMap<>();
+        for (BookmarkNodeModel model : BookmarkArrayListTable.getInstance(project).listAll()) {
+            String path = model.getFilePath().orElse(null);
+            if (path != null && wanted.contains(path)) {
+                byPath.computeIfAbsent(path, k -> new ArrayList<>()).add(model);
+            }
+        }
+        if (byPath.isEmpty()) {
+            return;
+        }
+
+        Map<VirtualFile, List<BookmarkNodeModel>> snapshot = new LinkedHashMap<>();
+        for (VirtualFile file : files) {
+            List<BookmarkNodeModel> models = byPath.get(file.getPath());
+            if (models != null) {
+                snapshot.put(file, models);
+            }
+        }
+        if (snapshot.isEmpty()) {
+            return;
+        }
+        runInBackground(() -> doRelocate(snapshot, oldRevisions));
     }
 
     /**
      * 重定位主流程。在后台线程执行，只做纯计算，不碰 UI 与 markup model。
      *
-     * @param files        待处理文件
-     * @param oldRevisions 文件绝对路径 → 切换前 revision；为空表示无 git 提议
+     * @param bookmarksByFile 文件 → 该文件的全部书签，已在 EDT 上取好快照
+     * @param oldRevisions    文件绝对路径 → 切换前 revision；为空表示无 git 提议
      */
-    private void doRelocate(List<VirtualFile> files, Map<String, String> oldRevisions) {
-        if (project.isDisposed() || files.isEmpty()) {
+    private void doRelocate(Map<VirtualFile, List<BookmarkNodeModel>> bookmarksByFile,
+                            Map<String, String> oldRevisions) {
+        if (project.isDisposed() || bookmarksByFile.isEmpty()) {
             return;
         }
 
-        Map<String, GitDiffHunkParser.LineMapping> mappings = buildMappings(files, oldRevisions);
+        Map<String, GitDiffHunkParser.LineMapping> mappings =
+                buildMappings(new ArrayList<>(bookmarksByFile.keySet()), oldRevisions);
         List<PendingUpdate> updates = new ArrayList<>();
 
-        for (VirtualFile file : files) {
+        for (Map.Entry<VirtualFile, List<BookmarkNodeModel>> entry : bookmarksByFile.entrySet()) {
             if (project.isDisposed()) {
                 return;
             }
-            Set<BookmarkNodeModel> models = bookmarksOf(file);
-            if (models.isEmpty()) {
-                // 文件重载事件按项目分发，未收藏的文件在这里被挡掉，省掉一次读取
-                continue;
-            }
+            VirtualFile file = entry.getKey();
             List<String> lines = ReadAction.compute(() -> BookmarkAnchorCapturer.readLines(file));
 
-            for (BookmarkNodeModel model : models) {
+            for (BookmarkNodeModel model : entry.getValue()) {
                 if (lines == null) {
                     // 文件不可读或已不存在：保留书签并标记失效，切回原分支后自动恢复
                     if (!model.isAnchorLost()) {
@@ -193,7 +239,11 @@ public final class BookmarkRelocationService {
                         LOG.info("书签「" + model.getName() + "」存在多个同分候选，取距起点最近的 "
                                 + result.getLine() + " 行");
                     }
-                    if (model.getLine() != result.getLine() || model.isAnchorLost()) {
+                    // 相似度兜底可能落在原行号上而文本已变（精确匹配若在原行号命中，
+                    // 快速路径早就返回 EXACT_AT_ORIGIN 了）。这种命中行号虽然没动，
+                    // 锚点也必须按新内容刷新，否则锚点文本一轮比一轮旧。
+                    if (model.getLine() != result.getLine() || model.isAnchorLost()
+                            || result.getConfidence().isFuzzyTextMatch()) {
                         updates.add(PendingUpdate.relocated(model, result.getLine(), lines));
                     }
                 } else if (!model.isAnchorLost()) {
@@ -352,11 +402,6 @@ public final class BookmarkRelocationService {
             }
         }
         return files;
-    }
-
-    private Set<BookmarkNodeModel> bookmarksOf(VirtualFile file) {
-        return new LinkedHashSet<>(
-                BookmarkArrayListTable.getInstance(project).findByFilePath(file.getPath()));
     }
 
     /**

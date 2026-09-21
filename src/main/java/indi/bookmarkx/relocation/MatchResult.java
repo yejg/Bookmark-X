@@ -38,7 +38,22 @@ public final class MatchResult {
         /**
          * 未能定位
          */
-        LOST
+        LOST;
+
+        /**
+         * 该命中是否只靠「文本足够像」而非精确匹配。
+         *
+         * <p>其余置信度都建立在精确文本匹配之上（连 {@link #GIT_VERIFIED} 也要通过
+         * {@code isExactAt} 验收），而精确匹配一旦落在原行号上，{@code AnchorMatcher}
+         * 的快速路径就会先行返回 {@link #EXACT_AT_ORIGIN}。所以只有本项可能
+         * 「行号没变、但行内文本已经变了」——这种命中必须按新内容刷新锚点，
+         * 否则锚点文本会一轮比一轮旧，相似度打分逐步退化。</p>
+         *
+         * @return true 表示命中的行内文本与锚点只是相近，不保证相同
+         */
+        public boolean isFuzzyTextMatch() {
+            return this == SIMILARITY;
+        }
     }
 
     private static final MatchResult LOST = new MatchResult(-1, Confidence.LOST);

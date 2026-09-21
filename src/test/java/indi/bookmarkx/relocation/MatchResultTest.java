@@ -50,4 +50,19 @@ class MatchResultTest {
             }
         }
     }
+
+    @Test
+    void shouldTreatOnlySimilarityAsFuzzyTextMatch() {
+        // 只有相似度兜底不保证行内文本与锚点相同；其余都是精确匹配，
+        // 一旦落在原行号上，AnchorMatcher 的快速路径就会先返回 EXACT_AT_ORIGIN。
+        assertTrue(MatchResult.Confidence.SIMILARITY.isFuzzyTextMatch());
+
+        for (MatchResult.Confidence confidence : MatchResult.Confidence.values()) {
+            if (confidence == MatchResult.Confidence.SIMILARITY) {
+                continue;
+            }
+            assertFalse(confidence.isFuzzyTextMatch(),
+                    confidence + " 建立在精确文本匹配之上，不应被当作模糊命中");
+        }
+    }
 }
