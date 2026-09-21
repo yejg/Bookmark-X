@@ -7,7 +7,7 @@ plugins {
 
 group 'indi.bookmarkx'
 
-version '3.0.1'
+version '3.1.0'
 
 sourceCompatibility = 17
 targetCompatibility = 17
@@ -51,8 +51,9 @@ patchPluginXml {
 
     changeNotes = """
       <ul>
-        <li>版本支持到 2026.2</li>
-        <li>新增书签时，显示当前所属的分组</li>
+        <li>切换 git 分支后自动重新定位书签，不再对应错代码行</li>
+        <li>书签暂时无法定位时会灰显提示，切回原分支后自动恢复，不会丢失</li>
+        <li>修复悬停书签预览气泡的内存泄漏问题</li>
       </ul>
     """
 }
