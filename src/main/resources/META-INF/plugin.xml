@@ -26,6 +26,14 @@
          on how to target different products -->
     <depends>com.intellij.modules.platform</depends>
     <depends>org.intellij.plugins.markdown</depends>
+    <!-- 可选依赖：未安装 Git 插件时用 bookmarkx-git.xml 之外的逻辑照常工作 -->
+    <depends optional="true" config-file="bookmarkx-git.xml">Git4Idea</depends>
+
+    <extensionPoints>
+        <extensionPoint name="lineMapperProvider"
+                        interface="indi.bookmarkx.relocation.LineMapperProvider"
+                        dynamic="true"/>
+    </extensionPoints>
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow id="Bookmark-X"

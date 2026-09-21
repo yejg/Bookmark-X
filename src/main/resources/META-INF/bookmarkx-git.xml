@@ -1,0 +1,10 @@
+<idea-plugin>
+    <!--
+      仅在 Git4Idea 插件存在时被加载的配置片段（见 plugin.xml 中的可选依赖声明）。
+      这样主 plugin.xml 不需要引用任何 git4idea 类，未安装 Git 插件的 IDE 不会
+      触发 NoClassDefFoundError，书签重定位自动降级为纯内容匹配。
+    -->
+    <extensions defaultExtensionNs="indi.nonoas.bookmarkx">
+        <lineMapperProvider implementation="indi.bookmarkx.relocation.git.GitLineMapperProvider"/>
+    </extensions>
+</idea-plugin>

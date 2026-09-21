@@ -36,6 +36,9 @@ intellij {
     version = '2022.3.3'
 //    version = '2023.3.6'
 //    version = '2024.3.7'
+    // Git4Idea 是 IDE 内置插件，这里只为编译期提供 git4idea 类；
+    // 运行时通过 plugin.xml 的可选依赖加载，未安装时不影响插件运行
+    plugins = ['Git4Idea']
     instrumentCode = false
 }
 
