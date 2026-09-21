@@ -1,7 +1,5 @@
 package indi.bookmarkx.ui.panel;
 
-import com.intellij.codeInsight.documentation.DocumentationComponent;
-import com.intellij.codeInsight.documentation.DocumentationManager;
 import com.intellij.icons.AllIcons;
 import com.intellij.lang.documentation.DocumentationMarkup;
 import com.intellij.openapi.actionSystem.ActionManager;
@@ -15,6 +13,8 @@ import com.intellij.openapi.ui.popup.BalloonBuilder;
 import com.intellij.openapi.ui.popup.JBPopupFactory;
 import com.intellij.ui.JBColor;
 import com.intellij.ui.components.JBPanel;
+import com.intellij.ui.components.JBScrollPane;
+import com.intellij.util.ui.HTMLEditorKitBuilder;
 import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.UIUtil;
 import indi.bookmarkx.common.I18N;
@@ -24,26 +24,30 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.JComponent;
+import javax.swing.JEditorPane;
 import javax.swing.JPanel;
 import java.awt.BorderLayout;
 import java.awt.Component;
 
 /**
- * 使用 IDEA 完全原生的 DocumentationComponent 实现的书签提示面板
- * 这是最接近 IDEA 原生 JavaDoc 显示的方式
+ * 书签提示面板，用原生 HTML 渲染展示书签名称、描述与状态。
+ * <p>渲染用的是 {@link JEditorPane} + {@link HTMLEditorKitBuilder}（平台在插件详情页
+ * 等非文档场景使用的同一套标准配方），而不是 {@code DocumentationComponent}——后者的
+ * 构造器只会把自己注册到「IDEA 原生文档提示弹窗」或「Documentation 工具窗口」两条
+ * disposable 链路上，本面板走的是普通弹窗/工具提示场景，两条都不落地，于是每次悬停
+ * 都会在 {@code Disposer} 里留下一个再也不会被释放的对象。{@code JEditorPane} 是
+ * 普通 Swing 组件，没有这层生命周期负担。</p>
  */
 public class BookmarkTipPanel extends JBPanel<BookmarkTipPanel> {
 
-    private final Project project;
     private final AbstractTreeNodeModel model;
-    private DocumentationComponent documentationComponent;
+    private JEditorPane editorPane;
     private Runnable onOpenInToolWindow;
 
     /**
      * 简单构造器，用于 Balloon 弹窗显示
      */
     public BookmarkTipPanel(@NotNull Project project, @NotNull AbstractTreeNodeModel model) {
-        this.project = project;
         this.model = model;
         setLayout(new BorderLayout());
         initComponents(false);
@@ -55,7 +59,6 @@ public class BookmarkTipPanel extends JBPanel<BookmarkTipPanel> {
     public BookmarkTipPanel(@NotNull Project project,
                                   @NotNull AbstractTreeNodeModel model,
                                   @Nullable Runnable onOpenInToolWindow) {
-        this.project = project;
         this.model = model;
         this.onOpenInToolWindow = onOpenInToolWindow;
         setLayout(new BorderLayout());
@@ -63,26 +66,24 @@ public class BookmarkTipPanel extends JBPanel<BookmarkTipPanel> {
     }
 
     private void initComponents(boolean withToolbar) {
-        // 创建 IDEA 原生的 DocumentationComponent
-        DocumentationManager docManager = DocumentationManager.getInstance(project);
-        documentationComponent = new DocumentationComponent(docManager);
+        editorPane = new JEditorPane();
+        // 与 UIUtil.convertToLabel 相同的配方：只读展示，视觉上表现得像一个 JLabel
+        editorPane.setEditable(false);
+        editorPane.setFocusable(false);
+        editorPane.setOpaque(false);
+        editorPane.setBorder(null);
+        editorPane.setContentType("text/html");
+        editorPane.setEditorKit(HTMLEditorKitBuilder.simple());
+        editorPane.setText(generateDocumentationHtml(model));
 
-        // 设置文档内容
-        String html = generateDocumentationHtml(model);
-        documentationComponent.setData(
-                null,  // targetElement (我们是自定义文档，没有 PSI 元素)
-                html,  // 文档 HTML 内容
-                null,  // originalElement
-                null,  // url
-                null   // ref
-        );
-
-        add(documentationComponent, BorderLayout.CENTER);
-
-        // 添加工具栏
         if (withToolbar) {
+            JBScrollPane scrollPane = new JBScrollPane(editorPane);
+            scrollPane.setBorder(null);
+            add(scrollPane, BorderLayout.CENTER);
             add(createBottomPanel(), BorderLayout.SOUTH);
             setPreferredSize(JBUI.size(400, 300));
+        } else {
+            add(editorPane, BorderLayout.CENTER);
         }
 
         setOpaque(false);
@@ -217,8 +218,7 @@ public class BookmarkTipPanel extends JBPanel<BookmarkTipPanel> {
      * 更新文档内容
      */
     public void updateContent(@NotNull AbstractTreeNodeModel newModel) {
-        String html = generateDocumentationHtml(newModel);
-        documentationComponent.setData(null, html, null, null, null);
+        editorPane.setText(generateDocumentationHtml(newModel));
     }
 
     /**
@@ -234,10 +234,11 @@ public class BookmarkTipPanel extends JBPanel<BookmarkTipPanel> {
     }
 
     /**
-     * 释放资源
+     * 释放资源。
+     * <p>{@link JEditorPane} 是普通 Swing 组件，随面板一起被 GC 回收即可，
+     * 不需要显式释放——保留此方法只是为了不破坏调用方现有的生命周期约定。</p>
      */
     public void dispose() {
-        // DocumentationComponent 会自动管理资源
     }
 
     /**
