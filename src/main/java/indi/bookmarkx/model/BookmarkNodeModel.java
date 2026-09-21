@@ -42,6 +42,16 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
 
     private Reference<RangeHighlighter> refHighlighter;
 
+    /**
+     * 内容锚点，用于文件被外部改写后重新定位。null 表示尚未建立
+     */
+    private BookmarkAnchor anchor;
+
+    /**
+     * 上次重定位是否未能找到对应代码行
+     */
+    private boolean anchorLost;
+
     public BookmarkNodeModel() {
     }
 
@@ -82,6 +92,28 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
 
     public void setIcon(Icon icon) {
         this.icon = icon;
+    }
+
+    /**
+     * @return 内容锚点；null 表示尚未建立
+     */
+    public BookmarkAnchor getAnchor() {
+        return anchor;
+    }
+
+    public void setAnchor(BookmarkAnchor anchor) {
+        this.anchor = anchor;
+    }
+
+    /**
+     * @return 上次重定位是否未能定位到对应代码行
+     */
+    public boolean isAnchorLost() {
+        return anchorLost;
+    }
+
+    public void setAnchorLost(boolean anchorLost) {
+        this.anchorLost = anchorLost;
     }
 
     @Override
@@ -144,6 +176,10 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
     }
 
     public void createLineMarker() {
+        if (anchorLost) {
+            // 未能定位时行号不可信，在错误的代码行画图标比不画更具误导性
+            return;
+        }
         RangeHighlighter myHighlighter = findMyHighlighter();
 
         if (myHighlighter != null) {

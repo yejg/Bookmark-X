@@ -31,6 +31,14 @@ public class BookmarkConverter {
             po.setDesc(nodeModel.getDesc());
             po.setBookmark(true);
 
+            BookmarkAnchor anchor = nodeModel.getAnchor();
+            if (anchor != null) {
+                po.setAnchorText(anchor.getAnchorText());
+                po.setContextBefore(anchor.persistedContextBefore());
+                po.setContextAfter(anchor.persistedContextAfter());
+            }
+            po.setAnchorLost(nodeModel.isAnchorLost());
+
             OpenFileDescriptor fileDescriptor = nodeModel.getOpenFileDescriptor();
             if (null != fileDescriptor) {
                 VirtualFile file = fileDescriptor.getFile();
@@ -62,6 +70,10 @@ public class BookmarkConverter {
             model.setLine(po.getLine());
             model.setName(po.getName());
             model.setDesc(po.getDesc());
+            // anchorText 为 null 时 fromPersisted 返回 null，旧版本数据因此自然得到无锚点状态
+            model.setAnchor(BookmarkAnchor.fromPersisted(
+                    po.getAnchorText(), po.getContextBefore(), po.getContextAfter()));
+            model.setAnchorLost(po.isAnchorLost());
 
             if (po.getVirtualFilePath() == null) {
                 return model;

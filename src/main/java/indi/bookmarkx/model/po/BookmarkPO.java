@@ -37,6 +37,26 @@ public class BookmarkPO {
 
     private List<BookmarkPO> children = new ArrayList<>();
 
+    /**
+     * 书签所在行的规范化文本。null 表示尚未建立锚点（旧版本数据）
+     */
+    private String anchorText;
+
+    /**
+     * 书签行之前最多 3 行上下文，规范化后以 \n 连接
+     */
+    private String contextBefore;
+
+    /**
+     * 书签行之后最多 3 行上下文，规范化后以 \n 连接
+     */
+    private String contextAfter;
+
+    /**
+     * 上次重定位是否未能找到对应代码行
+     */
+    private boolean anchorLost;
+
     public BookmarkPO() {
 
     }
@@ -115,6 +135,38 @@ public class BookmarkPO {
 
     public void setVirtualFilePath(String virtualFilePath) {
         this.virtualFilePath = virtualFilePath;
+    }
+
+    public String getAnchorText() {
+        return anchorText;
+    }
+
+    public void setAnchorText(String anchorText) {
+        this.anchorText = anchorText;
+    }
+
+    public String getContextBefore() {
+        return contextBefore;
+    }
+
+    public void setContextBefore(String contextBefore) {
+        this.contextBefore = contextBefore;
+    }
+
+    public String getContextAfter() {
+        return contextAfter;
+    }
+
+    public void setContextAfter(String contextAfter) {
+        this.contextAfter = contextAfter;
+    }
+
+    public boolean isAnchorLost() {
+        return anchorLost;
+    }
+
+    public void setAnchorLost(boolean anchorLost) {
+        this.anchorLost = anchorLost;
     }
 
     public boolean isBookmark() {
