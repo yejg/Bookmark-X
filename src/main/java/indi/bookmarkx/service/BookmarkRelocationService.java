@@ -100,6 +100,9 @@ public final class BookmarkRelocationService {
         List<VirtualFile> files = bookmarkedFiles();
         Map<String, String> snapshot = new HashMap<>(revisionBeforeSwitch);
         revisionBeforeSwitch.clear();
+        // 这里本来就要全量重算，切分支过程中积压的文件重载事件无需再触发一轮
+        alarm.cancelAllRequests();
+        pendingFiles.clear();
         runInBackground(() -> doRelocate(files, snapshot));
     }
 
@@ -157,9 +160,14 @@ public final class BookmarkRelocationService {
             if (project.isDisposed()) {
                 return;
             }
+            Set<BookmarkNodeModel> models = bookmarksOf(file);
+            if (models.isEmpty()) {
+                // 文件重载事件按项目分发，未收藏的文件在这里被挡掉，省掉一次读取
+                continue;
+            }
             List<String> lines = ReadAction.compute(() -> BookmarkAnchorCapturer.readLines(file));
 
-            for (BookmarkNodeModel model : bookmarksOf(file)) {
+            for (BookmarkNodeModel model : models) {
                 if (lines == null) {
                     // 文件不可读或已不存在：保留书签并标记失效，切回原分支后自动恢复
                     if (!model.isAnchorLost()) {

@@ -47,6 +47,10 @@
 
         <editorFactoryDocumentListener implementation="indi.bookmarkx.listener.BookmarkDocumentListener"/>
 
+        <!-- FileDocumentManagerListener 在 2022.3 是扩展点而非消息总线 topic，
+             这里用无前缀名，由 com.intellij. 前缀回退解析，与上面的写法一致 -->
+        <fileDocumentManagerListener implementation="indi.bookmarkx.listener.BookmarkFileReloadListener"/>
+
         <applicationConfigurable instance="indi.bookmarkx.MySettingsConfigurable"/>
 
         <postStartupActivity implementation="indi.bookmarkx.mcp.BookmarkMcpStartupActivity"/>
@@ -54,9 +58,13 @@
 
     </extensions>
 
-    <applicationListeners>
-
-    </applicationListeners>
+    <!-- 分支切换通知由 Git4Idea 的 GitBranchOperation 在 project 总线上发布，
+         必须注册为 projectListeners；注册到 applicationListeners 会静默失效。
+         该接口位于平台核心（lib/app.jar），因此无需依赖 Git4Idea 即可编译与注册。 -->
+    <projectListeners>
+        <listener class="indi.bookmarkx.listener.BookmarkBranchChangeListener"
+                  topic="com.intellij.openapi.vcs.BranchChangeListener"/>
+    </projectListeners>
 
     <!--插件动作-->
     <actions>
