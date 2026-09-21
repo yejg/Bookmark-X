@@ -23,6 +23,8 @@ import indi.bookmarkx.model.BookmarkConverter;
 import indi.bookmarkx.model.BookmarkNodeModel;
 import indi.bookmarkx.model.po.BookmarkPO;
 import indi.bookmarkx.persistence.MyPersistent;
+import indi.bookmarkx.service.BookmarkAnchorCapturer;
+import indi.bookmarkx.service.BookmarkRelocationService;
 import indi.bookmarkx.ui.dialog.BookmarkCreatorDialog;
 import indi.bookmarkx.ui.painter.LineEndPainter;
 import indi.bookmarkx.ui.panel.BookmarksManagePanel;
@@ -112,6 +114,8 @@ public final class BookmarksManager {
         if (result.isOk()) {
             bookmarkNodeModel.setName(result.getName());
             bookmarkNodeModel.setDesc(result.getDesc());
+            // 建锚点：记录书签行及其上下文，切分支后据此定位同一段代码
+            BookmarkAnchorCapturer.capture(bookmarkNodeModel);
             bookmarkEventPublisher.get().bookmarkAdded(bookmarkNodeModel);
 
             MyPersistent persistent = MyPersistent.getInstance(project);
@@ -140,6 +144,8 @@ public final class BookmarksManager {
                 int newLine = result.getLine();
                 if (bookmarkModel.getLine() != newLine) {
                     bookmarkModel.updateBookmarkLine(newLine - 1, false);
+                    // 用户手动改过行号，锚点必须跟着换，否则下次切分支会被拉回旧位置
+                    BookmarkAnchorCapturer.capture(bookmarkModel);
                 }
             }
 
@@ -246,13 +252,17 @@ public final class BookmarksManager {
         @Override
         public void onSuccess() {
             bookmarksManager.getToolWindowRootPanel().reInit(treeModel, project);
+            // 启动时校验全部书签，并为升级前的旧数据回填锚点
+            BookmarkRelocationService.getInstance(project).validateAll();
+
             // 获取当前打开的文件
             FileEditorManager fileEditorManager = FileEditorManager.getInstance(project);
             VirtualFile[] openFiles = fileEditorManager.getOpenFiles();
             for (VirtualFile file : openFiles) {
                 Set<BookmarkNodeModel> models = bookmarksManager.fileMarksCache.getBookmarks(file.getPath());
                 if (CollectionUtils.isEmpty(models)) {
-                    return;
+                    // 继续检查其余打开的文件，这里原本是 return，会让后面所有文件都拿不到行标记
+                    continue;
                 }
                 models.forEach(BookmarkNodeModel::createLineMarker);
             }

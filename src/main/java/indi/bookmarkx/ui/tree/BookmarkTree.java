@@ -19,6 +19,7 @@ import indi.bookmarkx.model.AbstractTreeNodeModel;
 import indi.bookmarkx.model.BookmarkNodeModel;
 import indi.bookmarkx.model.GroupNodeModel;
 import indi.bookmarkx.persistence.MySettings;
+import indi.bookmarkx.service.BookmarkAnchorCapturer;
 import indi.bookmarkx.ui.dialog.BookmarkCreatorDialog;
 import indi.bookmarkx.ui.dialog.LineAdjustDialog;
 import indi.bookmarkx.ui.panel.BookmarkTipPanel;
@@ -266,6 +267,9 @@ public class BookmarkTree extends Tree implements BookmarkListener {
                         newLine = Math.min(newLine, maxLine - 1);// 从0开始
                     }
                     model.updateBookmarkLine(newLine, false);
+                    // 按用户指定的新位置重建锚点并清除失效标记，
+                    // 否则下一次重定位会按旧锚点把书签拉回原处，手动修正白做
+                    BookmarkAnchorCapturer.capture(model);
                 }
                 BookmarksManager.getInstance(project).persistentSave();
             }
