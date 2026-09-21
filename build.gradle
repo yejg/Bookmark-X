@@ -1,3 +1,5 @@
+import org.jetbrains.intellij.tasks.RunPluginVerifierTask.FailureLevel
+
 plugins {
     id 'java'
     id 'org.jetbrains.intellij' version '1.13.3'
@@ -66,6 +68,29 @@ tasks.withType(JavaCompile).configureEach {
 
 test {
     useJUnitPlatform()
+}
+
+// 插件兼容性校验
+// 用 `./gradlew runPluginVerifier` 跑（`verifyPlugin` 只是描述符配置检查，不是真正的校验）。
+// IDE 发行版统一放在本机固定目录，不散落到 Gradle 缓存里：
+//   - 已解压的同名目录（IC-2022.2 等）会被直接复用，不会重新下载
+//   - 新增版本（如 IC-2026.1）只需加进 ideVersions，下载目标同样是这个目录
+// 注意：该任务需要联网取 https://www.jetbrains.com/updates/updates.xml 版本清单，
+// 加 --offline 会失败；编译与测试不受影响，可以照常离线跑
+runPluginVerifier {
+    downloadDir = 'D:/jetbrains-ides/pluginVerifier/ides'
+    ideVersions = ['IC-2022.2', 'IC-2023.2', 'IC-2024.3', 'IC-2025.1']
+    verificationReportsDir = 'build/reports/pluginVerifier'
+    // 项目存在既有的弃用 API 调用（BookmarkTipPanel 的 DocumentationComponent、
+    // MySettingsPanel 的 commons-lang StringUtils 等），不因弃用告警中断构建；
+    // 真正的兼容性缺陷、插件结构问题、缺失依赖仍视为失败
+    failureLevel = [
+            FailureLevel.COMPATIBILITY_PROBLEMS,
+            FailureLevel.INVALID_PLUGIN,
+            FailureLevel.MISSING_DEPENDENCIES,
+            FailureLevel.PLUGIN_STRUCTURE_WARNINGS,
+            FailureLevel.NOT_DYNAMIC,
+    ]
 }
 
 runIde {
