@@ -12,7 +12,6 @@ import com.intellij.openapi.ui.popup.JBPopupFactory;
 import com.intellij.ui.TreeSpeedSearch;
 import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.treeStructure.Tree;
-import com.intellij.util.ui.tree.TreeUtil;
 import indi.bookmarkx.BookmarksManager;
 import indi.bookmarkx.common.I18N;
 import indi.bookmarkx.listener.BookmarkListener;
@@ -152,14 +151,24 @@ public class BookmarkTree extends Tree implements BookmarkListener {
         JBMenuItem imEdit = new JBMenuItem(I18N.get("bookmark.edit"));
         JBMenuItem imDel = new JBMenuItem(I18N.get("bookmark.delete"));
         JBMenuItem imAddGroup = new JBMenuItem(I18N.get("bookmark.addGroup"));
+        JPopupMenu.Separator expandCollapseSeparator = new JPopupMenu.Separator();
+        JBMenuItem imExpandAll = new JBMenuItem(I18N.get("bookmark.expandAll"));
+        JBMenuItem imCollapseAll = new JBMenuItem(I18N.get("bookmark.collapseAll"));
         // TODO 需要添加可以将某个，目录拉出全局显示标签的按钮
         popupMenu.add(imEdit);
         popupMenu.add(imDel);
         popupMenu.add(imAddGroup);
+        // 展开全部/折叠全部只对分组节点有意义，选中书签时不加进菜单——
+        // 见下面 popupMenu 的 PopupMenuListener，与 batchAdjustLineItem 同一套动态显示模式
 
         JBPopupMenu popupMenuRoot = new JBPopupMenu();
         JBMenuItem imAddGroupRoot = new JBMenuItem(I18N.get("bookmark.addGroup"));
+        JBMenuItem imExpandAllRoot = new JBMenuItem(I18N.get("bookmark.expandAll"));
+        JBMenuItem imCollapseAllRoot = new JBMenuItem(I18N.get("bookmark.collapseAll"));
         popupMenuRoot.add(imAddGroupRoot);
+        popupMenuRoot.add(new JPopupMenu.Separator());
+        popupMenuRoot.add(imExpandAllRoot);
+        popupMenuRoot.add(imCollapseAllRoot);
 
         imEdit.addActionListener(e -> {
             TreePath path = getSelectionPath();
@@ -234,6 +243,21 @@ public class BookmarkTree extends Tree implements BookmarkListener {
         imAddGroup.addActionListener(addGroupListener);
         imAddGroupRoot.addActionListener(addGroupListener);
 
+        imExpandAll.addActionListener(e -> {
+            BookmarkTreeNode selectedNode = (BookmarkTreeNode) BookmarkTree.this.getLastSelectedPathComponent();
+            if (selectedNode != null) {
+                expandAllNodes(this.model, selectedNode);
+            }
+        });
+        imCollapseAll.addActionListener(e -> {
+            BookmarkTreeNode selectedNode = (BookmarkTreeNode) BookmarkTree.this.getLastSelectedPathComponent();
+            if (selectedNode != null) {
+                collapseAllNodes(this.model, selectedNode);
+            }
+        });
+        imExpandAllRoot.addActionListener(e -> expandAllNodes(this.model, (BookmarkTreeNode) this.model.getRoot()));
+        imCollapseAllRoot.addActionListener(e -> collapseAllNodes(this.model, (BookmarkTreeNode) this.model.getRoot()));
+
         // 右键点击事件
         addMouseListener(new MouseAdapter() {
             @Override
@@ -305,18 +329,32 @@ public class BookmarkTree extends Tree implements BookmarkListener {
                     popupMenu.add(batchAdjustLineSeparator);
                     popupMenu.add(batchAdjustLineItem);
                 }
+                // 展开全部/折叠全部只对分组节点有意义，选中书签时不展示
+                BookmarkTreeNode selectedNode = (BookmarkTreeNode) BookmarkTree.this.getLastSelectedPathComponent();
+                if (selectedNode != null && selectedNode.isGroup()
+                        && popupMenu.getComponentIndex(imExpandAll) == -1) {
+                    popupMenu.add(expandCollapseSeparator);
+                    popupMenu.add(imExpandAll);
+                    popupMenu.add(imCollapseAll);
+                }
             }
 
             @Override
             public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent e) {
                 popupMenu.remove(batchAdjustLineSeparator);
                 popupMenu.remove(batchAdjustLineItem);
+                popupMenu.remove(expandCollapseSeparator);
+                popupMenu.remove(imExpandAll);
+                popupMenu.remove(imCollapseAll);
             }
 
             @Override
             public void popupMenuCanceled(javax.swing.event.PopupMenuEvent e) {
                 popupMenu.remove(batchAdjustLineSeparator);
                 popupMenu.remove(batchAdjustLineItem);
+                popupMenu.remove(expandCollapseSeparator);
+                popupMenu.remove(imExpandAll);
+                popupMenu.remove(imCollapseAll);
             }
         });
     }
@@ -491,8 +529,46 @@ public class BookmarkTree extends Tree implements BookmarkListener {
             filteredRoot = new BookmarkTreeNode(true);
         }
         filtering = true;
-        super.setModel(new DefaultTreeModel(filteredRoot));
-        TreeUtil.expandAll(this);
+        DefaultTreeModel filteredModel = new DefaultTreeModel(filteredRoot);
+        super.setModel(filteredModel);
+        // 不用 TreeUtil.expandAll：反编译确认它内部是 promiseExpandAll(tree) 后
+        // 直接丢弃 Promise 的 fire-and-forget 调用，不保证在 setModel 之后的这一帧
+        // 就完成遍历，深层分组可能来不及展开。这棵克隆树是我们自己刚构建出来的，
+        // 结构已知且通常不深，直接同步递归 expandPath 更可靠，也不需要等待。
+        expandAllNodes(filteredModel, filteredRoot);
+    }
+
+    /**
+     * 同步展开某节点及其全部后代分组，确保过滤结果的书签叶子节点立即可见，
+     * 也用于右键菜单的「展开全部」。
+     */
+    private void expandAllNodes(DefaultTreeModel treeModel, BookmarkTreeNode node) {
+        if (node.isBookmark()) {
+            return;
+        }
+        expandPath(new TreePath(treeModel.getPathToRoot(node)));
+        int childCount = node.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            expandAllNodes(treeModel, (BookmarkTreeNode) node.getChildAt(i));
+        }
+    }
+
+    /**
+     * 同步折叠某节点及其全部后代分组，用于右键菜单的「折叠全部」。
+     * <p>自底向上折叠：先递归折叠全部子分组，再折叠自身。折叠子节点不会使
+     * 父节点的 {@link TreePath} 失效（父路径不依赖子节点是否展开），但反过来
+     * 如果先折叠父节点，子节点的展开状态在视觉上立刻不可见，逻辑上更绕；
+     * 自底向上与用户对「折叠全部」的直觉一致，且不依赖折叠顺序的正确性。</p>
+     */
+    private void collapseAllNodes(DefaultTreeModel treeModel, BookmarkTreeNode node) {
+        if (node.isBookmark()) {
+            return;
+        }
+        int childCount = node.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            collapseAllNodes(treeModel, (BookmarkTreeNode) node.getChildAt(i));
+        }
+        collapsePath(new TreePath(treeModel.getPathToRoot(node)));
     }
 
     /**
