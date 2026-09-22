@@ -2,13 +2,18 @@ package indi.bookmarkx.model;
 
 import com.intellij.codeInsight.daemon.GutterMark;
 import com.intellij.openapi.editor.Document;
+import com.intellij.openapi.editor.Editor;
+import com.intellij.openapi.editor.ex.EditorEx;
 import com.intellij.openapi.editor.ex.MarkupModelEx;
 import com.intellij.openapi.editor.ex.RangeHighlighterEx;
 import com.intellij.openapi.editor.impl.DocumentMarkupModel;
 import com.intellij.openapi.editor.markup.HighlighterLayer;
 import com.intellij.openapi.editor.markup.RangeHighlighter;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
+import com.intellij.openapi.fileEditor.FileEditor;
+import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.fileEditor.OpenFileDescriptor;
+import com.intellij.openapi.fileEditor.TextEditor;
 import com.intellij.openapi.util.Ref;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.reference.SoftReference;
@@ -222,12 +227,17 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
         if (this.line == newLine) {
             return;
         }
+        int oldLine = this.line;
         OpenFileDescriptor oldDescriptor = getOpenFileDescriptor();
         if (oldDescriptor == null) {
             // openFileDescriptor 为 null 时，只更新行号，不操作行标记
             this.line = newLine;
             return;
         }
+        // 行号发生了任何一次改变（无论是自动重定位还是手动拖拽纠正），都视为
+        // 「现在这个位置是可信的」——手动拖拽是用户明确告诉插件正确位置在哪，
+        // 理应立刻清掉失效标记恢复正常黄色图标，不能让它继续停在灰色状态。
+        this.anchorLost = false;
         this.line = newLine;
         this.setOpenFileDescriptor(
                 new OpenFileDescriptor(
@@ -239,8 +249,32 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
         );
         this.release();
         this.createLineMarker();
+        // gutter 图标随 RangeHighlighter 一起挪动，但行尾的书签名文字来自
+        // EditorLinePainter 扩展点，平台只在编辑器重绘对应行时才会重新调用它，
+        // 不会因为 RangeHighlighter 变化自动刷新。必须显式重绘旧行号与新行号，
+        // 否则行尾文字会停留在旧行上，与已经挪动到位的 gutter 图标不同步。
+        repaintLine(oldDescriptor, oldLine, newLine);
         if (doPersistentSave) {
             BookmarksManager.getInstance(oldDescriptor.getProject()).persistentSave();
+        }
+    }
+
+    /**
+     * 重绘旧行号与新行号所在区域，让 {@code EditorLinePainter}（行尾书签名注释）
+     * 与刚刚已经跟随 {@code RangeHighlighter} 挪动的 gutter 图标保持同步。
+     */
+    private static void repaintLine(OpenFileDescriptor descriptor, int oldLine, int newLine) {
+        VirtualFile file = descriptor.getFile();
+        FileEditorManager fileEditorManager = FileEditorManager.getInstance(descriptor.getProject());
+        for (FileEditor fileEditor : fileEditorManager.getEditors(file)) {
+            if (fileEditor instanceof TextEditor) {
+                Editor editor = ((TextEditor) fileEditor).getEditor();
+                if (editor instanceof EditorEx) {
+                    int from = Math.max(0, Math.min(oldLine, newLine));
+                    int to = Math.max(oldLine, newLine);
+                    ((EditorEx) editor).repaint(from, to);
+                }
+            }
         }
     }
 }
