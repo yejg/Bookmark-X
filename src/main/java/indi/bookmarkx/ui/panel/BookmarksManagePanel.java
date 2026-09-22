@@ -7,13 +7,16 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiManager;
+import com.intellij.ui.DocumentAdapter;
 import com.intellij.ui.IdeBorderFactory;
 import com.intellij.ui.JBSplitter;
+import com.intellij.ui.SearchTextField;
 import com.intellij.ui.SideBorder;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.util.ui.JBUI;
 import indi.bookmarkx.BookmarksManager;
 import indi.bookmarkx.MySettingsConfigurable;
+import indi.bookmarkx.common.I18N;
 import indi.bookmarkx.common.data.BookmarkArrayListTable;
 import indi.bookmarkx.global.FileMarksCache;
 import indi.bookmarkx.listener.BookmarkListener;
@@ -26,6 +29,7 @@ import indi.bookmarkx.ui.tree.BookmarkTreeNode;
 import org.jetbrains.annotations.NotNull;
 
 import javax.swing.*;
+import javax.swing.event.DocumentEvent;
 import javax.swing.event.TreeModelEvent;
 import javax.swing.event.TreeModelListener;
 import javax.swing.tree.DefaultTreeModel;
@@ -56,6 +60,20 @@ public class BookmarksManagePanel extends JPanel {
         this.project = project;
         tree = new BookmarkTree(project);
         setLayout(new BorderLayout());
+
+        // 0. 顶部搜索框，按名称/描述实时过滤书签
+        SearchTextField searchField = new SearchTextField(false);
+        searchField.setToolTipText(I18N.get("bookmark.search.placeholder"));
+        searchField.getTextEditor().getEmptyText().setText(I18N.get("bookmark.search.placeholder"));
+        searchField.addDocumentListener(new DocumentAdapter() {
+            @Override
+            protected void textChanged(@NotNull DocumentEvent e) {
+                tree.applyFilter(searchField.getText());
+            }
+        });
+        JPanel searchPanel = JBUI.Panels.simplePanel(searchField);
+        searchPanel.setBorder(JBUI.Borders.empty(4));
+        add(searchPanel, BorderLayout.NORTH);
 
         // 1. 初始化 Splitter
         JBSplitter jbSplitter = new JBSplitter(false, "BookmarkX.Splitter", 0.3f);

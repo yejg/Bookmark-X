@@ -12,6 +12,7 @@ import com.intellij.openapi.ui.popup.JBPopupFactory;
 import com.intellij.ui.TreeSpeedSearch;
 import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.treeStructure.Tree;
+import com.intellij.util.ui.tree.TreeUtil;
 import indi.bookmarkx.BookmarksManager;
 import indi.bookmarkx.common.I18N;
 import indi.bookmarkx.listener.BookmarkListener;
@@ -26,6 +27,7 @@ import indi.bookmarkx.ui.panel.BookmarkTipPanel;
 import indi.bookmarkx.utils.FileLineCounter;
 import org.apache.commons.lang3.Validate;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
 import javax.swing.Timer;
@@ -62,6 +64,15 @@ public class BookmarkTree extends Tree implements BookmarkListener {
     private DefaultTreeModel model;
 
     private Project project;
+
+    /**
+     * 是否处于搜索过滤态。为 true 时 {@link javax.swing.JTree} 当前渲染的是
+     * {@link #buildFilteredModel} 生成的只读克隆树，{@code this.model} 仍指向真实数据，
+     * 不受影响。过滤态下拖拽排序、右键增删被禁用，只保留点击/双击跳转这类只读操作，
+     * 因为它们改的都是当前挂载的树模型对象本身，不是通过 {@code BookmarksManager}
+     * 数据服务——挂着克隆树时执行会导致编辑结果丢失，不会写回真实数据。
+     */
+    private boolean filtering = false;
 
     public BookmarkTree(Project project) {
         super();
@@ -107,6 +118,12 @@ public class BookmarkTree extends Tree implements BookmarkListener {
 
         // 选中监听
         addTreeSelectionListener(event -> {
+            if (filtering) {
+                // 过滤态下选中的是克隆节点。navigator 保存的是节点引用，一旦指向克隆
+                // 节点，退出过滤换回真实模型后这些引用就是悬空的，"上一个/下一个书签"
+                // 导航会出错，所以过滤态下不更新它。
+                return;
+            }
             int selectionCount = getSelectionCount();
             BookmarkTreeNode selectedNode = (BookmarkTreeNode) getLastSelectedPathComponent();
             if (selectionCount != 1 || null == selectedNode) {
@@ -222,6 +239,11 @@ public class BookmarkTree extends Tree implements BookmarkListener {
             @Override
             public void mouseReleased(MouseEvent e) {
                 if (!SwingUtilities.isRightMouseButton(e)) {
+                    return;
+                }
+                if (filtering) {
+                    // 过滤态下树上是只读克隆节点，编辑类菜单（编辑/删除/新建分组）
+                    // 一旦执行只会作用在克隆节点上，不会写回真实数据，直接不弹出菜单
                     return;
                 }
                 int row = getClosestRowForLocation(e.getX(), e.getY());
@@ -434,6 +456,84 @@ public class BookmarkTree extends Tree implements BookmarkListener {
         nodeCache.clear();
         loadNodeCache((BookmarkTreeNode) root);
         super.setModel(model);
+    }
+
+    /**
+     * 是否处于搜索过滤态。
+     */
+    public boolean isFiltering() {
+        return filtering;
+    }
+
+    /**
+     * 按关键词过滤展示的书签。
+     * <p>只切换 {@link javax.swing.JTree} 当前渲染用的模型（走 {@code super.setModel}），
+     * 不碰 {@link #model}/{@link #nodeCache}/{@link #navigator}——这几个字段必须一直
+     * 指向真实数据，其余所有增删改逻辑都是直接基于它们操作的。</p>
+     *
+     * @param query 过滤关键词，为空或全空白时恢复展示真实树
+     */
+    public void applyFilter(@Nullable String query) {
+        String keyword = query == null ? "" : query.trim();
+        if (keyword.isEmpty()) {
+            if (filtering) {
+                filtering = false;
+                super.setModel(this.model);
+                expandRow(0);
+            }
+            return;
+        }
+
+        BookmarkTreeNode root = (BookmarkTreeNode) this.model.getRoot();
+        BookmarkTreeNode filteredRoot = cloneMatching(root, keyword.toLowerCase(Locale.ROOT));
+        if (filteredRoot == null) {
+            // 根节点本身不含 userObject 意义上的"匹配"判断，兜底保证根节点始终存在
+            filteredRoot = new BookmarkTreeNode(true);
+        }
+        filtering = true;
+        super.setModel(new DefaultTreeModel(filteredRoot));
+        TreeUtil.expandAll(this);
+    }
+
+    /**
+     * 递归构建一份只读克隆子树：书签节点的名称或描述命中关键词才保留；
+     * 分组节点只要有任意后代命中就连同该分组一起保留（分组本身文案不参与匹配，
+     * 用户是在找书签，不是在找分组名）。
+     * <p>克隆节点与原节点共享同一个 {@link AbstractTreeNodeModel} 引用（{@code userObject}
+     * 没有被复制），因此点击、双击跳转等只读取 {@code userObject} 的操作在克隆树上
+     * 结果与在真实树上完全一致。</p>
+     *
+     * @return 命中过滤条件的克隆节点；本节点与其全部后代都不命中时返回 {@code null}
+     */
+    @Nullable
+    private static BookmarkTreeNode cloneMatching(BookmarkTreeNode node, String lowerKeyword) {
+        if (node.isBookmark()) {
+            AbstractTreeNodeModel userObject = (AbstractTreeNodeModel) node.getUserObject();
+            boolean nameHit = userObject.getName() != null
+                    && userObject.getName().toLowerCase(Locale.ROOT).contains(lowerKeyword);
+            boolean descHit = userObject.getDesc() != null
+                    && userObject.getDesc().toLowerCase(Locale.ROOT).contains(lowerKeyword);
+            if (!nameHit && !descHit) {
+                return null;
+            }
+            BookmarkTreeNode clone = new BookmarkTreeNode(userObject);
+            return clone;
+        }
+
+        BookmarkTreeNode clone = null;
+        int childCount = node.getChildCount();
+        for (int i = 0; i < childCount; i++) {
+            BookmarkTreeNode childClone = cloneMatching((BookmarkTreeNode) node.getChildAt(i), lowerKeyword);
+            if (childClone == null) {
+                continue;
+            }
+            if (clone == null) {
+                Object userObject = node.getUserObject();
+                clone = userObject == null ? new BookmarkTreeNode(false) : new BookmarkTreeNode((AbstractTreeNodeModel) userObject);
+            }
+            clone.add(childClone);
+        }
+        return clone;
     }
 
     /**
@@ -716,6 +816,10 @@ public class BookmarkTree extends Tree implements BookmarkListener {
 
         @Override
         public int getSourceActions(JComponent c) {
+            if (((BookmarkTree) c).isFiltering()) {
+                // 搜索过滤态下拖的是克隆节点，排序结果不会写回真实数据，禁止拖动
+                return NONE;
+            }
             return MOVE;
         }
 
@@ -739,6 +843,9 @@ public class BookmarkTree extends Tree implements BookmarkListener {
 
         @Override
         public boolean canImport(TransferSupport support) {
+            if (((BookmarkTree) support.getComponent()).isFiltering()) {
+                return false;
+            }
             JTree.DropLocation dl = (JTree.DropLocation) support.getDropLocation();
             TreePath destPath = dl.getPath();
             if (destPath == null) {
