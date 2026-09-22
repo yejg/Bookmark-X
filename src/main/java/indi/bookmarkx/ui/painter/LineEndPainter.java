@@ -40,10 +40,11 @@ public class LineEndPainter extends EditorLinePainter {
         try {
             List<BookmarkNodeModel> onlyIndex = bookmarkArrayListTable.getOnlyIndex(virtualFile.getPath());
             BookmarkNodeModel bookmarkNodeModel = LineEndPainter.findLine(onlyIndex, i);
-            if (bookmarkNodeModel == null || bookmarkNodeModel.isAnchorLost()) {
-                // 失效书签的行号已经不可信，在旧行号后面写书名反而误导读者，宁可不画
+            if (bookmarkNodeModel == null) {
                 return null;
             }
+            // 失效书签的行号不保证准确，但仍然展示：与 gutter 图标一致地照常显示，
+            // 方便用户结合行内容判断这行是不是书签原来所在的地方，需要的话直接拖拽纠正。
             result.add(new LineExtensionInfo(String.format(" // %s", bookmarkNodeModel.getName()),
                     new TextAttributes(null, null, JBColor.GRAY, null, Font.PLAIN)));
             return result;

@@ -176,10 +176,9 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
     }
 
     public void createLineMarker() {
-        if (anchorLost) {
-            // 未能定位时行号不可信，在错误的代码行画图标比不画更具误导性
-            return;
-        }
+        // 未能定位时行号不可信，但仍照常画图标：用户能一眼看到它，凭代码内容
+        // 目测判断该拖到哪一行，比完全不展示更方便手动纠正。图标本身在
+        // MyGutterIconRenderer 会换成失效样式区分出来。
         RangeHighlighter myHighlighter = findMyHighlighter();
 
         if (myHighlighter != null) {
@@ -200,6 +199,23 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
                     bkx.setGutterIconRenderer(new MyGutterIconRenderer(this));
                 });
 
+    }
+
+    /**
+     * 刷新已存在的 gutter 图标，用于 {@code anchorLost} 状态切换后强制重绘。
+     * <p>{@link MyGutterIconRenderer#getIcon()} 是按 {@code model.isAnchorLost()}
+     * 动态判断的，但平台只在调用 {@link RangeHighlighter#setGutterIconRenderer} 时
+     * 才会触发重绘，仅仅改变 model 的字段不会让已有图标自动刷新，所以状态切换后
+     * 必须重新 set 一次（哪怕换上去的还是同一个 renderer 实例）。</p>
+     * <p>行号不存在图标（比如从未画过、或者已被移除）时什么都不做——那种情况该走
+     * {@link #createLineMarker()} 新建，不是这里要处理的。</p>
+     */
+    public void refreshLineMarker() {
+        RangeHighlighter highlighter = findMyHighlighter();
+        if (highlighter == null) {
+            return;
+        }
+        highlighter.setGutterIconRenderer(new MyGutterIconRenderer(this));
     }
 
     public void updateBookmarkLine(int newLine, boolean doPersistentSave) {

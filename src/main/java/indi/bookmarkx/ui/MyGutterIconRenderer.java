@@ -19,6 +19,7 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.ui.JBColor;
 import indi.bookmarkx.action.BookmarkEditAction;
 import indi.bookmarkx.action.BookmarkRemoveAction;
+import indi.bookmarkx.common.I18N;
 import indi.bookmarkx.common.MyIcons;
 import indi.bookmarkx.model.BookmarkNodeModel;
 import org.jetbrains.annotations.NotNull;
@@ -57,13 +58,20 @@ public class MyGutterIconRenderer extends GutterIconRenderer {
 
     @Override
     public @Nullable String getTooltipText() {
+        if (model.isAnchorLost()) {
+            // gutter 图标现在即便定位失败也照常展示，悬停时要说明这一点，
+            // 否则用户会把这行当成确定无疑的书签位置。
+            String desc = model.getDesc();
+            String lostTip = I18N.get("bookmark.anchorLostTip");
+            return desc == null || desc.isBlank() ? lostTip : desc + "\n" + lostTip;
+        }
         return model.getDesc();
     }
 
     @Override
     @NotNull
     public Icon getIcon() {
-        return MyIcons.BOOKMARK;
+        return model.isAnchorLost() ? MyIcons.BOOKMARK_LOST : MyIcons.BOOKMARK;
     }
 
     @Override

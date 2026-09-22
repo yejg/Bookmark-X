@@ -275,20 +275,30 @@ public final class BookmarkRelocationService {
             BookmarkNodeModel model = update.model;
             if (update.kind == PendingUpdate.Kind.LOST) {
                 model.setAnchorLost(true);
-                releaseMarker(model);
+                // 图标本身一直保留在原行号上（不再像早期版本那样被摘掉），这里只需要
+                // 把已有图标换成失效样式；没有图标（比如从未画过）时新建一个
+                if (model.findMyHighlighter() != null) {
+                    model.refreshLineMarker();
+                } else {
+                    model.createLineMarker();
+                }
                 lost++;
             } else if (update.kind == PendingUpdate.Kind.BACKFILL) {
                 // 位置不动，仅按当前内容补建锚点
                 BookmarkAnchorCapturer.capture(model, update.lines);
                 backfilled++;
             } else {
+                boolean wasLost = model.isAnchorLost();
                 int oldLine = model.getLine();
                 model.setAnchorLost(false);
                 model.updateBookmarkLine(update.line, false);
                 if (model.getLine() == oldLine) {
-                    // 行号未变时 updateBookmarkLine 会提前返回，但失效期间图标曾被打掉，需要补建
-                    model.createLineMarker();
-                }
+                    // 行号未变时 updateBookmarkLine 会提前返回，不会碰图标；
+                    // 若刚才还是失效状态，图标需要从失效样式切回正常样式
+                    if (wasLost) {
+                        model.refreshLineMarker();
+                    }
+                } 
                 // 命中可能来自相似度兜底，代码已有细微变动，按新内容刷新锚点避免误差累积
                 BookmarkAnchorCapturer.capture(model, update.lines);
                 relocated++;
@@ -310,16 +320,6 @@ public final class BookmarkRelocationService {
                             I18N.get("bookmark.relocationNotificationContent", relocated, lost),
                             NotificationType.WARNING)
                     .notify(project);
-        }
-    }
-
-    private static void releaseMarker(BookmarkNodeModel model) {
-        try {
-            if (model.getOpenFileDescriptor() != null) {
-                model.release();
-            }
-        } catch (Exception e) {
-            LOG.info("释放书签行标记失败: " + model.getName(), e);
         }
     }
 
