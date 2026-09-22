@@ -28,6 +28,7 @@ import javax.swing.JEditorPane;
 import javax.swing.JPanel;
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.Dimension;
 
 /**
  * 书签提示面板，用原生 HTML 渲染展示书签名称、描述与状态。
@@ -65,28 +66,61 @@ public class BookmarkTipPanel extends JBPanel<BookmarkTipPanel> {
         initComponents(true);
     }
 
+    /**
+     * 面板的首选宽度上限。内容较窄时面板跟着收缩；超过这个宽度就换行，
+     * 高度随内容自适应增长，而不是像固定尺寸那样把短内容也撑成一大块空白，
+     * 或者把长内容硬压扁成一团。
+     */
+    private static final int MAX_WIDTH = JBUI.scale(420);
+
     private void initComponents(boolean withToolbar) {
-        editorPane = new JEditorPane();
-        // 与 UIUtil.convertToLabel 相同的配方：只读展示，视觉上表现得像一个 JLabel
-        editorPane.setEditable(false);
-        editorPane.setFocusable(false);
-        editorPane.setOpaque(false);
-        editorPane.setBorder(null);
-        editorPane.setContentType("text/html");
-        editorPane.setEditorKit(HTMLEditorKitBuilder.simple());
+        editorPane = createAutoSizingEditorPane();
         editorPane.setText(generateDocumentationHtml(model));
 
         if (withToolbar) {
             JBScrollPane scrollPane = new JBScrollPane(editorPane);
             scrollPane.setBorder(null);
+            // 让 JEditorPane 自己算好的高度决定滚动面板的首选高度，只在真的超出
+            // MAX_WIDTH/一定高度时才出现滚动条，而不是像固定尺寸那样总是预留空白
+            scrollPane.setVerticalScrollBarPolicy(JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+            scrollPane.setHorizontalScrollBarPolicy(JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
             add(scrollPane, BorderLayout.CENTER);
             add(createBottomPanel(), BorderLayout.SOUTH);
-            setPreferredSize(JBUI.size(400, 300));
         } else {
             add(editorPane, BorderLayout.CENTER);
         }
 
         setOpaque(false);
+    }
+
+    /**
+     * 创建一个按 HTML 内容自适应尺寸的只读 {@link JEditorPane}。
+     * <p>配方与 {@code UIUtil.convertToLabel} 相同，只是额外覆写
+     * {@link JEditorPane#getPreferredSize()}：Swing 的 HTML 视图默认按无限宽度
+     * 布局成一整行再报告尺寸，必须先用 {@link JEditorPane#setSize} 把宽度钳到
+     * {@link #MAX_WIDTH} 触发一次重新换行，再读取此时的高度，否则内容一多就会
+     * 把弹窗撑成一条又矮又宽的带子。</p>
+     */
+    private static JEditorPane createAutoSizingEditorPane() {
+        JEditorPane pane = new JEditorPane() {
+            @Override
+            public Dimension getPreferredSize() {
+                Dimension natural = super.getPreferredSize();
+                if (natural.width <= MAX_WIDTH) {
+                    return natural;
+                }
+                setSize(MAX_WIDTH, Integer.MAX_VALUE);
+                Dimension wrapped = super.getPreferredSize();
+                return new Dimension(MAX_WIDTH, wrapped.height);
+            }
+        };
+        pane.setEditable(false);
+        pane.setFocusable(false);
+        pane.setOpaque(false);
+        pane.setBorder(null);
+        pane.setContentType("text/html");
+        pane.setEditorKit(HTMLEditorKitBuilder.simple());
+        return pane;
     }
 
     /**
