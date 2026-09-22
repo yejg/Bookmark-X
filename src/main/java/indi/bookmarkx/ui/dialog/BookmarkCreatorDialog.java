@@ -124,12 +124,17 @@ public class BookmarkCreatorDialog extends DialogWrapper {
         resolveCurrentGroup();
 
         // 1. 编辑器与预览面板
+        // JBScrollPane 的 setupCorners() 会给自己套一层 IdeBorderFactory 默认边框，
+        // 外层 layeredPane 又画了一条 customLine 分隔线，两层叠在一起就是双线框——
+        // 这里只需要外层那一条，滚动面板自身的边框必须清空。
         tfDesc.setOneLineMode(false);
         tfDesc.setBorder(JBUI.Borders.empty(5));
         JBScrollPane editScroll = new JBScrollPane(tfDesc);
+        editScroll.setBorder(JBUI.Borders.empty());
 
         previewPanel.setBorder(JBUI.Borders.empty(10));
         JBScrollPane previewScroll = new JBScrollPane(previewPanel);
+        previewScroll.setBorder(JBUI.Borders.empty());
 
         contentCard.add(editScroll, "EDIT");
         contentCard.add(previewScroll, "PREVIEW");
