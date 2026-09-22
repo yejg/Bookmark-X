@@ -89,11 +89,19 @@ public class GitLineMapperProvider implements LineMapperProvider {
 
         Map<String, GitDiffHunkParser.LineMapping> byRelative = GitDiffHunkParser.parseMultiFile(output);
         Map<String, GitDiffHunkParser.LineMapping> byAbsolute = new HashMap<>();
-        for (Map.Entry<String, GitDiffHunkParser.LineMapping> entry : byRelative.entrySet()) {
-            String absolute = relativeToAbsolute.get(entry.getKey());
-            if (absolute != null) {
-                byAbsolute.put(absolute, entry.getValue());
+        for (String relative : relativePaths) {
+            String absolute = relativeToAbsolute.get(relative);
+            if (absolute == null) {
+                continue;
             }
+            // git diff 只为「确实有差异」的文件输出 +++/hunk：本次请求范围内的文件，
+            // 如果没有出现在 diff 结果里，说明 git 明确判定它在两个 revision 间没有
+            // 任何变化——必须显式记为 unchanged，而不是让调用方看到「查不到」，
+            // 否则会被误判为「无法确定」而退化成内容匹配，导致完全没变化的文件里的
+            // 书签被内容匹配误判挪到别的相似行上（这正是过度重定位的根因）。
+            GitDiffHunkParser.LineMapping mapping = byRelative.getOrDefault(
+                    relative, GitDiffHunkParser.LineMapping.unchanged());
+            byAbsolute.put(absolute, mapping);
         }
         return byAbsolute;
     }

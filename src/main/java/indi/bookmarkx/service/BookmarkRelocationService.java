@@ -214,6 +214,29 @@ public final class BookmarkRelocationService {
                 return;
             }
             VirtualFile file = entry.getKey();
+            GitDiffHunkParser.LineMapping mapping = mappings.get(file.getPath());
+            // git diff 明确判定该文件在两个 revision 间毫无变化：原行号必然仍然正确，
+            // 连内容匹配兜底都不需要跑。这一步至关重要——此前对「没有 git 提议」的文件
+            // 一律退化成纯内容匹配，导致完全没变化的文件里的书签，也会被内容匹配算法
+            // 按「周围几行 + 相似度打分」误判挪到文件中另一处相似的代码块上。一次涉及
+            // 少数几个文件的分支同步，往往会因此错误地「重新定位」大量原本根本不需要
+            // 改动的书签，这正是用户反馈「切完分支书签还是对不上」的根因。
+            if (mapping != null && mapping.isUnchanged()) {
+                if (entry.getValue().stream().anyMatch(BookmarkNodeModel::isAnchorLost)) {
+                    // 文件没变，但书签之前处于失效状态（比如上一轮误判导致的）：
+                    // 用当前内容回填锚点、恢复正常展示，行号本身不动
+                    List<String> lines = ReadAction.compute(() -> BookmarkAnchorCapturer.readLines(file));
+                    if (lines != null) {
+                        for (BookmarkNodeModel model : entry.getValue()) {
+                            if (model.isAnchorLost()) {
+                                updates.add(PendingUpdate.relocated(model, model.getLine(), lines));
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
             List<String> lines = ReadAction.compute(() -> BookmarkAnchorCapturer.readLines(file));
 
             for (BookmarkNodeModel model : entry.getValue()) {

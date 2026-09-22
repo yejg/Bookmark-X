@@ -136,10 +136,34 @@ public final class GitDiffHunkParser {
      */
     public static final class LineMapping {
 
+        /**
+         * 该文件确实没有任何差异时使用的单例：{@code hunks} 为空列表，
+         * 但与「查不到这个文件」在语义上不同，见 {@link #unchanged()}。
+         */
+        private static final LineMapping UNCHANGED = new LineMapping(new ArrayList<>());
+
         private final List<Hunk> hunks;
 
         private LineMapping(List<Hunk> hunks) {
             this.hunks = hunks;
+        }
+
+        /**
+         * @return 一个代表「该文件在两个 revision 之间完全没有变化」的映射。
+         * <p>与「Map 里查不到这个文件的 LineMapping」不同：后者可能是路径解析
+         * 失败、文件被删除等异常情况，调用方必须继续走内容匹配兜底；而这个
+         * 结果是 git diff 明确给出的结论——旧行号处的内容必然与新文件完全一致，
+         * 任何行都不需要重新定位，包括退化到内容匹配都不需要。</p>
+         */
+        public static LineMapping unchanged() {
+            return UNCHANGED;
+        }
+
+        /**
+         * @return 是否代表「该文件完全没有变化」（见 {@link #unchanged()}）
+         */
+        public boolean isUnchanged() {
+            return this == UNCHANGED;
         }
 
         /**

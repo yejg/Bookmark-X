@@ -180,4 +180,25 @@ class GitDiffHunkParserTest {
         assertTrue(GitDiffHunkParser.parseMultiFile("").isEmpty());
         assertTrue(GitDiffHunkParser.parseMultiFile(null).isEmpty());
     }
+
+    @Test
+    void unchangedMappingShouldBeIdentityAndFlaggedAsUnchanged() {
+        GitDiffHunkParser.LineMapping mapping = GitDiffHunkParser.LineMapping.unchanged();
+
+        assertTrue(mapping.isUnchanged());
+        assertMapped(mapping, 0, 0);
+        assertMapped(mapping, 42, 42);
+    }
+
+    @Test
+    void parsedMappingFromEmptyDiffShouldNotBeFlaggedAsUnchanged() {
+        // parse("") 得到的是「没有任何 hunk」的映射，等价于恒等映射，但它不是
+        // GitLineMapperProvider 用来标记「该文件确实没有变化」的那个特定实例——
+        // 两者调用 map() 的行为相同，isUnchanged() 的语义却完全不同：前者仅表示
+        // 「这段 diff 文本里没解析出 hunk」，可能是因为传入的从来就不是这个文件的
+        // diff 片段；只有 unchanged() 单例才代表「git 明确判定该文件毫无差异」。
+        GitDiffHunkParser.LineMapping mapping = GitDiffHunkParser.parse("");
+
+        assertFalse(mapping.isUnchanged());
+    }
 }
