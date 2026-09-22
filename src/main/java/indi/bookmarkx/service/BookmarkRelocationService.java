@@ -30,6 +30,7 @@ import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 书签重定位编排服务。
@@ -63,6 +64,39 @@ public final class BookmarkRelocationService {
      */
     private final Set<VirtualFile> pendingFiles = ConcurrentHashMap.newKeySet();
 
+    /**
+     * 分支切换世代号。每次 {@link #relocateAfterBranchChange()} 触发都会自增。
+     * <p>{@code BookmarkBranchChangeListener}（有 git 提议，走 diff + 锚点验收）与
+     * {@code BookmarkFileReloadListener}（无 git 提议，纯内容匹配兜底）会在同一次
+     * IDE 内切分支时被同时触发——checkout 改写的文件既产生「分支已切换」事件，也产生
+     * 「文件内容从磁盘重载」事件。两条链路各自异步排队（{@code invokeLater}/
+     * {@link Alarm} 定时器），互相之间没有先后保证：曾经发生过内容匹配那条低精度链路
+     * 在 git 提议链路算完「之后」才把结果应用到 EDT，用不准确的匹配结果覆盖了刚刚才
+     * 算对的行号，表现为切完分支后書签又被重新（错误地）挪动一次。</p>
+     * <p>{@link #flushPending()} 发起计算时会记下当时的世代号；结果算完准备应用到
+     * EDT 时重新核对世代号，如果分支切换在此期间已经把世代号推得更新，说明这份纯
+     * 内容匹配的结果已经过时（存在更权威的 git 提议结果可能已经或即将覆盖它），
+     * 直接丢弃，不应用、也不覆盖。</p>
+     */
+    private final AtomicLong generation = new AtomicLong();
+
+    /**
+     * {@code branchWillChange} 触发的时间戳（毫秒），0 表示当前不处于分支切换窗口期。
+     * <p>用于让 {@link #scheduleRelocate(VirtualFile)} 在分支切换进行中时直接忽略
+     * 文件重载事件——checkout 改写文件必然触发 {@code fileContentReloaded}，与其等
+     * 计算跑完再靠 {@link #generation} 甄别丢弃，不如提前不排这次计算，省去无谓的
+     * 后台线程开销。设超时兜底（见 {@link #IN_PROGRESS_TIMEOUT_MS}）而不是一直等
+     * {@code branchHasChanged} 来清除，避免万一后续通知异常丢失导致这个窗口永久
+     * 卡住，此后所有命令行 checkout 场景都被误伤。</p>
+     */
+    private volatile long branchChangeStartedAt;
+
+    /**
+     * 分支切换窗口期的兜底超时。超过这个时长还没等到 {@code branchHasChanged}，
+     * 就不再信任这个窗口标记，避免异常场景下永久拦截文件重载事件。
+     */
+    private static final long IN_PROGRESS_TIMEOUT_MS = 30_000;
+
     private final Alarm alarm;
 
     public BookmarkRelocationService(Project project) {
@@ -78,6 +112,7 @@ public final class BookmarkRelocationService {
      * 分支切换前调用，记录当前 revision 以便切换后计算 diff
      */
     public void captureRevisions() {
+        branchChangeStartedAt = System.currentTimeMillis();
         revisionBeforeSwitch.clear();
         for (VirtualFile file : bookmarkedFiles()) {
             LineMapperProvider provider = LineMapperProvider.findAvailable(project, file);
@@ -100,13 +135,18 @@ public final class BookmarkRelocationService {
      * 分支切换后调用，对全部含书签的文件执行重定位
      */
     public void relocateAfterBranchChange() {
+        branchChangeStartedAt = 0;
         List<VirtualFile> files = bookmarkedFiles();
         Map<String, String> snapshot = new HashMap<>(revisionBeforeSwitch);
         revisionBeforeSwitch.clear();
+        // 推进世代号：即使下面清空了防抖队列，仍可能有一份 flushPending 已经在
+        // 后台线程算到一半（早于本方法调用），它算完准备应用时会靠世代号识别出
+        // 「已经过时」而自行放弃，见 generation 字段注释。
+        long myGeneration = generation.incrementAndGet();
         // 这里本来就要全量重算，切分支过程中积压的文件重载事件无需再触发一轮
         alarm.cancelAllRequests();
         pendingFiles.clear();
-        startRelocate(files, snapshot);
+        startRelocate(files, snapshot, myGeneration);
     }
 
     /**
@@ -114,6 +154,13 @@ public final class BookmarkRelocationService {
      */
     public void scheduleRelocate(VirtualFile file) {
         if (file == null || project.isDisposed()) {
+            return;
+        }
+        long startedAt = branchChangeStartedAt;
+        if (startedAt != 0 && System.currentTimeMillis() - startedAt < IN_PROGRESS_TIMEOUT_MS) {
+            // 正处于 branchWillChange 到 branchHasChanged 之间的窗口：这次文件重载
+            // 大概率是 checkout 改写磁盘内容引发的，稍后 branchHasChanged 会带着
+            // 更精确的 git 提议重算全部文件，这里排一次纯内容匹配纯属浪费，直接跳过。
             return;
         }
         pendingFiles.add(file);
@@ -130,7 +177,7 @@ public final class BookmarkRelocationService {
             if (project.isDisposed()) {
                 return;
             }
-            startRelocate(bookmarkedFiles(), Collections.emptyMap());
+            startRelocate(bookmarkedFiles(), Collections.emptyMap(), generation.get());
         });
     }
 
@@ -140,13 +187,16 @@ public final class BookmarkRelocationService {
         if (files.isEmpty()) {
             return;
         }
+        // 记录发起时的世代号：如果在本次计算跑完之前又发生了一次分支切换
+        // （generation 被推进），说明这份纯内容匹配的结果已经过时，不应用它。
+        long myGeneration = generation.get();
         // 本方法跑在 Alarm 的线程池线程上，而要读的书签表只在 EDT 上安全，故先回到 EDT
         ApplicationManager.getApplication().invokeLater(() -> {
             if (project.isDisposed()) {
                 return;
             }
             // 此路径拿不到切换前的 revision，直接走内容匹配
-            startRelocate(files, Collections.emptyMap());
+            startRelocate(files, Collections.emptyMap(), myGeneration);
         });
     }
 
@@ -158,10 +208,12 @@ public final class BookmarkRelocationService {
      * {@link #runInBackground} 吞掉并只记一条日志，表现出来就是
      * 「书签重定位静默不生效」，极难排查。所以凡是要访问书签表的动作都在这里收口。</p>
      *
-     * @param files        含书签的文件
-     * @param oldRevisions 文件绝对路径 → 切换前 revision；为空表示无 git 提议
+     * @param files              含书签的文件
+     * @param oldRevisions       文件绝对路径 → 切换前 revision；为空表示无 git 提议
+     * @param expectedGeneration 发起本轮计算时的世代号，应用结果前会重新核对
      */
-    private void startRelocate(List<VirtualFile> files, Map<String, String> oldRevisions) {
+    private void startRelocate(List<VirtualFile> files, Map<String, String> oldRevisions,
+                               long expectedGeneration) {
         Set<String> wanted = new HashSet<>();
         for (VirtualFile file : files) {
             wanted.add(file.getPath());
@@ -190,17 +242,18 @@ public final class BookmarkRelocationService {
         if (snapshot.isEmpty()) {
             return;
         }
-        runInBackground(() -> doRelocate(snapshot, oldRevisions));
+        runInBackground(() -> doRelocate(snapshot, oldRevisions, expectedGeneration));
     }
 
     /**
      * 重定位主流程。在后台线程执行，只做纯计算，不碰 UI 与 markup model。
      *
-     * @param bookmarksByFile 文件 → 该文件的全部书签，已在 EDT 上取好快照
-     * @param oldRevisions    文件绝对路径 → 切换前 revision；为空表示无 git 提议
+     * @param bookmarksByFile    文件 → 该文件的全部书签，已在 EDT 上取好快照
+     * @param oldRevisions       文件绝对路径 → 切换前 revision；为空表示无 git 提议
+     * @param expectedGeneration 发起本轮计算时的世代号，最终应用前会重新核对
      */
     private void doRelocate(Map<VirtualFile, List<BookmarkNodeModel>> bookmarksByFile,
-                            Map<String, String> oldRevisions) {
+                            Map<String, String> oldRevisions, long expectedGeneration) {
         if (project.isDisposed() || bookmarksByFile.isEmpty()) {
             return;
         }
@@ -276,15 +329,30 @@ public final class BookmarkRelocationService {
         }
 
         if (!updates.isEmpty()) {
-            ApplicationManager.getApplication().invokeLater(() -> applyUpdates(updates));
+            ApplicationManager.getApplication().invokeLater(() -> applyUpdates(updates, oldRevisions, expectedGeneration));
         }
     }
 
     /**
      * 回到 EDT 应用结果：更新模型与行标记、通知书签树、持久化。
+     *
+     * @param oldRevisions       本轮计算是否带有 git 提议；为空表示来自纯内容匹配
+     *                           兜底路径（{@link #flushPending()}/{@link #validateAll()}）
+     * @param expectedGeneration 发起本轮计算时的世代号
      */
-    private void applyUpdates(List<PendingUpdate> updates) {
+    private void applyUpdates(List<PendingUpdate> updates, Map<String, String> oldRevisions,
+                              long expectedGeneration) {
         if (project.isDisposed()) {
+            return;
+        }
+        // 只拦截「无 git 提议」的低精度结果：它可能是 BookmarkFileReloadListener 那条
+        // 兜底链路在本次分支切换期间被同时触发的产物。如果计算跑到这里的这段时间里，
+        // 世代号已经被 relocateAfterBranchChange 推进过，说明存在一次更权威的、带
+        // git 提议的重算或者正在进行或者已经算完，这份纯内容匹配结果已经过时，
+        // 必须丢弃——否则会出现「git 提议已经把行号修对，随后又被内容匹配错误覆盖」。
+        // 带 git 提议的结果（oldRevisions 非空）本身就代表当前最新世代，不需要拦截。
+        if (oldRevisions.isEmpty() && expectedGeneration != generation.get()) {
+            LOG.info("发现更新的分支切换世代，丢弃过时的内容匹配结果（" + updates.size() + " 条）");
             return;
         }
         BookmarksManager manager = BookmarksManager.getInstance(project);
