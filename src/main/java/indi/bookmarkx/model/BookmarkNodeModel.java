@@ -76,7 +76,45 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
         this.index = index;
     }
 
+    /**
+     * 获取当前行号。
+     * <p>Gutter 图标依附的 {@link RangeHighlighter} 才是行号的实时真相来源——它由编辑器
+     * markup 层维护，会随文档增删行自动跟随移动，不需要任何人手动同步。此前的实现是
+     * 反过来的：{@code line} 字段是独立存储，寄望 {@code BookmarkDocumentListener} 在每次
+     * 文档变化时把 highlighter 算出的最新行号“手动搬运”回这个字段，而搬运用的
+     * {@code OpenFileDescriptor#getRangeMarker()} 只有 descriptor 曾被 {@code navigate()}
+     * 过才可能非空，很多场景下同步压根不会发生，于是字段停留在旧值——表现为 Gutter
+     * 图标（读 highlighter，位置准）与书签名称文字/双击跳转（读这个字段，位置旧）在
+     * 编辑器里分家，跳到不同行。</p>
+     * <p>现在有 highlighter 时优先以它为准，顺手回填字段，这样字段本身也不会再过期；
+     * 没有 highlighter（书签尚未画过图标、文件未打开、后台线程计算等）时退回字段值，
+     * 不强求这些场景下也能拿到实时行号。</p>
+     */
     public int getLine() {
+        if (openFileDescriptor == null) {
+            // 尚未关联文件（刚 new 出来、还没走完创建流程）时压根不可能有 highlighter，
+            // findMyHighlighter() 会因为 openFileDescriptor 为 null 而抛异常，这里提前拦掉。
+            return line;
+        }
+        RangeHighlighter highlighter = findMyHighlighter();
+        if (highlighter != null && highlighter.isValid()) {
+            Document document = highlighter.getDocument();
+            int liveLine = document.getLineNumber(highlighter.getStartOffset());
+            if (liveLine != this.line) {
+                this.line = liveLine;
+            }
+            return liveLine;
+        }
+        return line;
+    }
+
+    /**
+     * 直接读取持久化字段值，不查询 highlighter。
+     * <p>{@link #getLine()} 会访问 {@code MarkupModelEx}/{@code Document} 等编辑器
+     * UI 状态，只应在 EDT 上调用。{@link indi.bookmarkx.service.BookmarkRelocationService}
+     * 的重定位计算跑在后台线程池，不能碰这些对象，那里必须用这个方法读起点行号。</p>
+     */
+    public int getPersistedLine() {
         return line;
     }
 
@@ -132,7 +170,34 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
                 .map(VirtualFile::getPath);
     }
 
+    /**
+     * 跳转到书签所在位置。
+     * <p>{@link #getOpenFileDescriptor()} 返回的 descriptor 行号是创建时固化的值，即使
+     * {@link #getLine()} 已经从 highlighter 校正过，缓存的 descriptor 也不会跟着变——
+     * 双击书签跳错行的另一半原因就在这里：即便字段已经修好，跳转用的还是旧 descriptor。
+     * 跳转前用 {@link #getLine()} 的最新结果重新构造一次 descriptor，确保落点与 Gutter
+     * 图标当前的真实位置一致。</p>
+     *
+     * @return 是否成功发起跳转
+     */
+    public boolean navigate() {
+        OpenFileDescriptor descriptor = getOpenFileDescriptor();
+        if (descriptor == null) {
+            return false;
+        }
+        int currentLine = getLine();
+        if (currentLine != descriptor.getLine()) {
+            descriptor = new OpenFileDescriptor(descriptor.getProject(), descriptor.getFile(), currentLine, 0);
+            setOpenFileDescriptor(descriptor);
+        }
+        descriptor.navigate(true);
+        return true;
+    }
+
     public RangeHighlighter findMyHighlighter() {
+        if (openFileDescriptor == null) {
+            return null;
+        }
         Document document = getCachedDocument();
         if (document == null) return null;
         RangeHighlighter result = SoftReference.dereference(refHighlighter);
@@ -160,24 +225,32 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
 
     @Nullable
     public Document getCachedDocument() {
+        if (openFileDescriptor == null) {
+            return null;
+        }
         return FileDocumentManager.getInstance().getCachedDocument(openFileDescriptor.getFile());
     }
 
     public void release() {
-        int line = getLine();
+        // 故意不用 getLine()：它读到 highlighter 后会把结果写回 this.line 字段，
+        // 而 release() 常在 updateBookmarkLine() 里于 this.line 已经改成新值、
+        // 旧 highlighter 还没摘掉的中间状态被调用——一旦这里查到旧 highlighter
+        // 又把字段覆盖回旧位置，紧接着 createLineMarker() 就会在错误的旧行建图标。
+        // release() 只是要摘掉当前挂着的旧 highlighter，直接查 highlighter 本身即可，
+        // 不需要经过会有副作用的 getLine()。
+        RangeHighlighter highlighter = findMyHighlighter();
+        if (highlighter == null) {
+            return;
+        }
+        int line = highlighter.getDocument().getLineNumber(highlighter.getStartOffset());
         if (line < 0) {
             return;
         }
         final Document document = getCachedDocument();
         if (document == null) return;
-        MarkupModelEx markup = (MarkupModelEx) DocumentMarkupModel.forDocument(document, openFileDescriptor.getProject(), true);
-        final Document markupDocument = markup.getDocument();
-        if (markupDocument.getLineCount() <= line) return;
-        RangeHighlighter highlighter = findMyHighlighter();
-        if (highlighter != null) {
-            refHighlighter = null;
-            highlighter.dispose();
-        }
+        if (document.getLineCount() <= line) return;
+        refHighlighter = null;
+        highlighter.dispose();
     }
 
     public void createLineMarker() {
@@ -224,10 +297,13 @@ public class BookmarkNodeModel extends AbstractTreeNodeModel {
     }
 
     public void updateBookmarkLine(int newLine, boolean doPersistentSave) {
-        if (this.line == newLine) {
+        // 用 getLine() 而不是直接读字段：字段只在 getLine() 被调用时才会顺带校正，
+        // 直接比较 this.line 可能拿到尚未校正的陈旧值，导致该更新的没更新、或者
+        // 明明没变化却重建一次 highlighter。
+        int oldLine = getLine();
+        if (oldLine == newLine) {
             return;
         }
-        int oldLine = this.line;
         OpenFileDescriptor oldDescriptor = getOpenFileDescriptor();
         if (oldDescriptor == null) {
             // openFileDescriptor 为 null 时，只更新行号，不操作行标记

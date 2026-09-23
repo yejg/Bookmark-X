@@ -409,12 +409,26 @@ public class BookmarkTree extends Tree implements BookmarkListener {
             BookmarksManager.getInstance(project).removeBookRemark((BookmarkNodeModel) node.getUserObject());
             return;
         }
-        int childCount = node.getChildCount();
-        for (int i = 0; i < childCount; i++) {
-            remove((BookmarkTreeNode) node.getChildAt(i));
+        // 必须先把子节点复制成一份快照再遍历，不能直接在循环里用 getChildAt(i)：
+        // 递归删除子节点的过程中，子节点数组会实时收缩（删一个少一个，后面的自动
+        // 前移），而循环变量 i 却仍按删除前算好的 childCount 往后走，删到后面
+        // i 就会超出当前实际子节点数——这正是 ArrayIndexOutOfBoundsException
+        // "3 >= 3" 的成因：数组早就被删空了，循环却还在按最初的总数往下跑。
+        List<BookmarkTreeNode> children = new ArrayList<>(node.getChildCount());
+        for (int i = 0; i < node.getChildCount(); i++) {
+            children.add((BookmarkTreeNode) node.getChildAt(i));
         }
-        // 删除完所有书签节点之后，删除分组节点
-        this.model.removeNodeFromParent(node);
+        for (BookmarkTreeNode child : children) {
+            remove(child);
+        }
+        // 删除完所有书签节点之后，删除分组节点。删子节点期间 removeBookRemark
+        // 会同步触发 bookmarkRemoved 回调（见本类 bookmarkRemoved 方法），理论上
+        // 不会连带摘掉这个分组节点本身，但 removeNodeFromParent 对已经没有父节点
+        // 的节点会直接抛 IllegalArgumentException("node does not have a parent")，
+        // 一次防御性判空成本很低，能避免任何未预料到的联动导致的崩溃。
+        if (node.getParent() != null) {
+            this.model.removeNodeFromParent(node);
+        }
     }
 
     public BookmarkTreeNode getNodeByModel(BookmarkNodeModel nodeModel) {
@@ -813,12 +827,9 @@ public class BookmarkTree extends Tree implements BookmarkListener {
             activeBookmark(nextNode);
 
             BookmarkNodeModel model = (BookmarkNodeModel) nextNode.getUserObject();
-            OpenFileDescriptor openFileDescriptor = model.getOpenFileDescriptor();
-            if (null == openFileDescriptor) {
+            if (!model.navigate()) {
                 log.warn("Can't find open file descriptor for " + model.getName());
-                return;
             }
-            openFileDescriptor.navigate(true);
         }
 
         private int preTreeNodeIndex(BookmarkTreeNode activeGroup, BookmarkTreeNode activatedBookmark) {
@@ -1167,12 +1178,10 @@ public class BookmarkTree extends Tree implements BookmarkListener {
             if (selectedNode != null && selectedNode.isBookmark()) {
                 BookmarkNodeModel bookmark = (BookmarkNodeModel) selectedNode.getUserObject();
 
-                OpenFileDescriptor fileDescriptor = bookmark.getOpenFileDescriptor();
-                if (null == fileDescriptor) {
+                if (!bookmark.navigate()) {
                     log.info("【手动识别】退出鼠标双击逻辑：fileDescriptor为空");
                     return;
                 }
-                fileDescriptor.navigate(true);
             }
             log.info("【手动识别】退出鼠标双击逻辑，导航成功");
         }

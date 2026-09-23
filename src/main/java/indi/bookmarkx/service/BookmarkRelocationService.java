@@ -225,6 +225,11 @@ public final class BookmarkRelocationService {
         for (BookmarkNodeModel model : BookmarkArrayListTable.getInstance(project).listAll()) {
             String path = model.getFilePath().orElse(null);
             if (path != null && wanted.contains(path)) {
+                // getLine() 会按 Gutter 图标当前实际位置校正 line 字段，且只能在 EDT
+                // 上调用（内部访问 MarkupModelEx）；这里正是安全窗口。校正一次后，
+                // 后台线程只需读字段（见 doRelocate 里的 getPersistedLine()），
+                // 不必再碰任何编辑器 UI 状态。
+                model.getLine();
                 byPath.computeIfAbsent(path, k -> new ArrayList<>()).add(model);
             }
         }
@@ -282,7 +287,7 @@ public final class BookmarkRelocationService {
                     if (lines != null) {
                         for (BookmarkNodeModel model : entry.getValue()) {
                             if (model.isAnchorLost()) {
-                                updates.add(PendingUpdate.relocated(model, model.getLine(), lines));
+                                updates.add(PendingUpdate.relocated(model, model.getPersistedLine(), lines));
                             }
                         }
                     }
@@ -307,8 +312,8 @@ public final class BookmarkRelocationService {
                     continue;
                 }
 
-                int gitCandidate = gitCandidateOf(mappings, file, model.getLine());
-                MatchResult result = AnchorMatcher.match(model.getAnchor(), model.getLine(), gitCandidate, lines);
+                int gitCandidate = gitCandidateOf(mappings, file, model.getPersistedLine());
+                MatchResult result = AnchorMatcher.match(model.getAnchor(), model.getPersistedLine(), gitCandidate, lines);
 
                 if (result.isFound()) {
                     if (result.getConfidence() == MatchResult.Confidence.CONTENT_AMBIGUOUS) {
@@ -318,7 +323,7 @@ public final class BookmarkRelocationService {
                     // 相似度兜底可能落在原行号上而文本已变（精确匹配若在原行号命中，
                     // 快速路径早就返回 EXACT_AT_ORIGIN 了）。这种命中行号虽然没动，
                     // 锚点也必须按新内容刷新，否则锚点文本一轮比一轮旧。
-                    if (model.getLine() != result.getLine() || model.isAnchorLost()
+                    if (model.getPersistedLine() != result.getLine() || model.isAnchorLost()
                             || result.getConfidence().isFuzzyTextMatch()) {
                         updates.add(PendingUpdate.relocated(model, result.getLine(), lines));
                     }
@@ -548,7 +553,9 @@ public final class BookmarkRelocationService {
         }
 
         static PendingUpdate backfill(BookmarkNodeModel model, List<String> lines) {
-            return new PendingUpdate(Kind.BACKFILL, model, model.getLine(), lines);
+            // 该工厂方法只在后台线程的 doRelocate 里被调用，不能碰会查询编辑器 UI
+            // 状态的 getLine()，这里的行号只是留痕用（BACKFILL 场景位置本不该变）。
+            return new PendingUpdate(Kind.BACKFILL, model, model.getPersistedLine(), lines);
         }
     }
 }
