@@ -5,6 +5,7 @@ import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.editor.event.DocumentEvent;
 import com.intellij.openapi.editor.event.DocumentListener;
+import com.intellij.openapi.editor.ex.EditorEx;
 import com.intellij.openapi.editor.impl.EditorFactoryImpl;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.project.Project;
@@ -70,7 +71,7 @@ public class BookmarkDocumentListener implements DocumentListener {
                 return;
             }
 
-            perceivedLineChange(project, indexList, document);
+            perceivedLineChange(project, indexList, document, editor);
         } catch (Exception e) {
             LOG.info("perceivedLineChange error", e);
         }
@@ -88,19 +89,29 @@ public class BookmarkDocumentListener implements DocumentListener {
                 && event.getNewLength() == document.getTextLength();
     }
 
-    private void perceivedLineChange(Project project, List<BookmarkNodeModel> indexList, Document eventDocument) {
+    private void perceivedLineChange(Project project, List<BookmarkNodeModel> indexList, Document eventDocument,
+                                      Editor editor) {
         if (CollectionUtils.isEmpty(indexList)) {
             return;
         }
         BookmarksManager bookmarksManager = BookmarksManager.getInstance(project);
+        int minChangedLine = Integer.MAX_VALUE;
+        int maxChangedLine = -1;
         for (BookmarkNodeModel node : indexList) {
             if (node == null) {
                 continue;
             }
+            // 记录校正前的行号，用于判断本次事件是否真的移动了这个书签。
+            int oldLine = node.getPersistedLine();
             // getLine() 会优先从 Gutter 图标依附的 highlighter 读取实时行号并顺带
             // 校正字段，不再需要这里手动同步；没有 highlighter（书签尚未画过图标）
             // 时保留原值，也不应该因此删除书签——文件仍然打开着，只是这个书签还
             // 没被渲染过，不代表它已经失效。
+            int newLine = node.getLine();
+            if (newLine != oldLine) {
+                minChangedLine = Math.min(minChangedLine, Math.min(oldLine, newLine));
+                maxChangedLine = Math.max(maxChangedLine, Math.max(oldLine, newLine));
+            }
             // 锚点要跟随编辑器内的实际内容，否则下次切分支会拿过期文本去匹配。
             // 已失效的书签例外：它的锚点是「最后一次已知正确位置」的凭据，不能被覆盖。
             if (!node.isAnchorLost()) {
@@ -108,6 +119,28 @@ public class BookmarkDocumentListener implements DocumentListener {
             }
         }
         bookmarksManager.persistentSave();
+
+        // Gutter 图标随 RangeHighlighter 自动跟随文档编辑，但行尾的书签名文字来自
+        // EditorLinePainter 扩展点，平台只在重绘对应行时才会重新调用它，不会因为
+        // RangeHighlighter 变化自动刷新（这一点与 BookmarkNodeModel#updateBookmarkLine
+        // 里的说明一致）。一次编辑可能同时挪动多个书签，此处按本次事件里所有发生
+        // 位移的书签，合并重绘一次覆盖新旧行号的区间，避免行尾文字停留在旧行。
+        if (maxChangedLine >= 0) {
+            repaintLines(editor, minChangedLine, maxChangedLine);
+        }
+    }
+
+    /**
+     * 重绘 [from, to] 行区间，让行尾书签名注释跟上已经随 RangeHighlighter 移动的行号。
+     */
+    private static void repaintLines(Editor editor, int from, int to) {
+        if (!(editor instanceof EditorEx)) {
+            return;
+        }
+        int lastLine = Math.max(0, editor.getDocument().getLineCount() - 1);
+        int safeFrom = Math.max(0, Math.min(from, lastLine));
+        int safeTo = Math.max(safeFrom, Math.min(to, lastLine));
+        ((EditorEx) editor).repaint(safeFrom, safeTo);
     }
 
     private Editor getEditor(Document document) {
