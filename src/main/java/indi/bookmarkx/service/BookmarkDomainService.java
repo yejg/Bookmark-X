@@ -184,6 +184,11 @@ public final class BookmarkDomainService {
         BookmarkTreeNode treeNode = new BookmarkTreeNode(bookmarkNodeModel);
         context.tree.insertNodeInto(treeNode, groupNode, groupNode.getChildCount());
         refreshBookmarkIndices(groupNode);
+        // UI 手动创建书签（BookmarksManager#createBookRemark）会在这一步建立内容锚点，
+        // MCP 走的这条路径此前遗漏了它：书签没有锚点时，下次切分支/重定位只能走
+        // backfill（原样按当前行号回填，见 BookmarkRelocationService#doRelocate），
+        // 一旦文件在锚点补建之前已经变化，回填会把错位的行号当成正确位置固化下来。
+        BookmarkAnchorCapturer.capture(bookmarkNodeModel);
         publishEvent(listener -> listener.bookmarkAdded(bookmarkNodeModel));
         return toBookmarkView(treeNode);
     }
@@ -212,6 +217,9 @@ public final class BookmarkDomainService {
                 throw new IllegalArgumentException("Another bookmark already exists at the requested file and line");
             }
             bookmark.updateBookmarkLine(newInternalLine, false);
+            // 行号变化后必须重建锚点，否则下次重定位会按旧内容的锚点把书签拉回原处，
+            // 与 BookmarkTree 批量调整行号、BookmarksManager#editBookRemark 的既有约定一致。
+            BookmarkAnchorCapturer.capture(bookmark);
         }
 
         List<String> requestedGroupPath = draft.getGroupPath() == null ? null : normalizeGroupPath(draft.getGroupPath());
